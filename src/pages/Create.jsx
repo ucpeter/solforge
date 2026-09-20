@@ -111,7 +111,7 @@ export default function Create() {
         if (cancelled) return
         const c = await estimateCreationCost(connection, plan, {
           priorityFeeMicroLamports: settings.priorityFeeMicroLamports,
-          transactionCount: packInstructions(plan.instructions).length,
+          transactionCount: packInstructions(plan.instructions, { payer: wallet.publicKey ?? undefined }).length,
           signatureCount: 2,
         })
         if (!cancelled) setCost(c)
@@ -208,7 +208,7 @@ export default function Create() {
     try {
       const p = await buildTokenCreation(connection, { payer: wallet.publicKey, form, metadataUri })
       setPlan(p)
-      setTxs(packInstructions(p.instructions))
+      setTxs(packInstructions(p.instructions, { payer: wallet.publicKey }))
       setReviewOpen(true)
     } catch (err) {
       setCostError(err.message)
