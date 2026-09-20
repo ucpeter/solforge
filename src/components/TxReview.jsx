@@ -19,6 +19,7 @@ import {
   assertNoHiddenSOL,
   finalizeTransaction,
   inspectTransaction,
+  refreshBlockhash,
   sendTransactionBatch,
   simulateTransaction,
 } from '../lib/txkit.js'
@@ -133,6 +134,9 @@ export default function TxReview({
     setPhase('sending')
     setError(null)
     try {
+      // Renew every blockhash at the last moment — the one from review prep
+      // may have expired while the user was reading or deciding.
+      for (const p of prepared) await refreshBlockhash(connection, p.tx)
       const results = await sendTransactionBatch({
         connection,
         transactions: prepared.map((p) => p.tx),
@@ -146,7 +150,10 @@ export default function TxReview({
       await onSent?.(results)
     } catch (err) {
       setError(err?.message || String(err))
-      setPhase('failed')
+      // Stay in "ready" rather than "failed": the review is still valid. If the
+      // wallet prompt took too long and the blockhash expired mid-flight, the
+      // user can just tap "Confirm & sign" again — it refreshes and retries.
+      setPhase('ready')
     }
   }
 
