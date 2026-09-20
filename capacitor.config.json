@@ -1,0 +1,9 @@
+{
+  "appId": "app.solforge.web",
+  "appName": "SolForge",
+  "webDir": "dist",
+  "backgroundColor": "#0b1220",
+  "android": {
+    "allowMixedContent": false
+  }
+}

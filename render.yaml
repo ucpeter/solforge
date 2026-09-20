@@ -1,0 +1,21 @@
+# Render Blueprint — one-click deploy.
+#
+# Deploy: render.com → "New" → "Blueprint" → pick this repo (it reads this file).
+# Manual alternative: "New" → "Static Site" with
+#   Build command:      npm ci && npm run build
+#   Publish directory:  dist
+#
+# Optional environment (Render → service → Environment tab) — build-time
+# defaults for the RPC each cluster uses. Unset = public Solana RPCs.
+# For mainnet-facing deployments set a real RPC (Helius/Triton/QuickNode):
+#   VITE_DEVNET_RPC  = https://devnet.helius-rpc.com/?api-key=...
+#   VITE_MAINNET_RPC = https://mainnet.helius-rpc.com/?api-key=...
+#
+# No rewrites are needed: the app is a single index.html with state-based
+# navigation (no URL routes), so plain static hosting is all it takes.
+services:
+  - type: static
+    name: solforge
+    env: node
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
