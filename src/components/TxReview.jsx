@@ -69,9 +69,11 @@ export default function TxReview({
         const finalised = []
         const sims = []
         for (const tx of transactions) {
-          const extras = []
           const idx = finalised.length
-          for (const kp of partialSigners[idx] ?? []) extras.push(kp.publicKey)
+          // inspectTransaction expects KEYPAIRS (it reads s.publicKey itself).
+          // Pushing kp.publicKey here double-unwrapped them and crashed the
+          // review for any transaction with an extra signer (e.g. the mint keypair).
+          const extras = partialSigners[idx] ?? []
 
           const fin = await finalizeTransaction(connection, tx, {
             payer: wallet.publicKey,
