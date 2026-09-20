@@ -1,0 +1,12 @@
+import * as M from '@meteora-ag/cp-amm-sdk'
+console.log('DEAD_LIQUIDITY =', M.DEAD_LIQUIDITY.toString())
+console.log('LIQUIDITY_SCALE =', M.LIQUIDITY_SCALE)
+console.log('MIN_SQRT_PRICE =', M.MIN_SQRT_PRICE.toString())
+console.log('MAX_SQRT_PRICE =', M.MAX_SQRT_PRICE.toString())
+console.log('BASIS_POINT_MAX =', M.BASIS_POINT_MAX, ' FEE_DENOMINATOR =', M.FEE_DENOMINATOR)
+console.log('getSqrtPriceFromPrice.length =', M.getSqrtPriceFromPrice.length, M.getSqrtPriceFromPrice.toString().slice(0,300))
+console.log('\nprice 0.001 B per A (decimals 9/9) =', M.getSqrtPriceFromPrice(0.001, 9, 9).toString())
+console.log('price 1 B per A (9/9) =', M.getSqrtPriceFromPrice(1, 9, 9).toString())
+console.log('back to price:', M.getPriceFromSqrtPrice(M.getSqrtPriceFromPrice(1, 9, 9), 9, 9))
+console.log('\nCollectFeeMode', M.CollectFeeMode, 'ActivationType', M.ActivationType, 'ConfigPermission', M.ConfigPermission)
+console.log('getMaxAmountWithSlippage:', M.getMaxAmountWithSlippage.toString().slice(0,200))
