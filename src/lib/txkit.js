@@ -428,6 +428,25 @@ export async function getLatestBlockhashContext(connection) {
 }
 
 /**
+ * Renew a transaction's blockhash immediately before it is signed and sent.
+ *
+ * A blockhash is only valid for ~150 slots (a couple of minutes). If the user
+ * spends that long reading the review or confirming in the wallet, the RPC
+ * rejects the send with "Blockhash not found". Refreshing right before the
+ * wallet prompt keeps the gap between stamping and sending under a second.
+ */
+export async function refreshBlockhash(connection, tx) {
+  const { blockhash, lastValidBlockHeight } = await getLatestBlockhashContext(connection)
+  if (isVersioned(tx)) {
+    tx.message.recentBlockhash = blockhash
+  } else {
+    tx.recentBlockhash = blockhash
+    tx.lastValidBlockHeight = lastValidBlockHeight
+  }
+  return blockhash
+}
+
+/**
  * Simulate to learn real CU usage, then set the limit with headroom.
  * Falls back to a conservative default if simulation is unavailable.
  */
