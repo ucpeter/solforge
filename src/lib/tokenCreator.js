@@ -235,10 +235,12 @@ export async function buildTokenCreation(connection, { payer, form, metadataUri 
     instructions.push(createSetAuthorityInstruction(mint, payer, AuthorityType.FreezeAccount, null, [], tokenProgram))
   }
   if (form.renounceMetadataUpdate && !is2022) {
+    // Wrapper key must be exactly `updateMetadataAccountArgsV2` — the IDL's
+    // struct name for this instruction's args (verified against the SDK).
     instructions.push(
       createUpdateMetadataAccountV2Instruction(
         { metadata: metadataAccount, updateAuthority: payer },
-        { updateMetadataAccountV2Args: { updateAuthority: new PublicKey(RENOUNCED_UPDATE_AUTHORITY), data: null, primarySaleHappened: null, isMutable: false } }
+        { updateMetadataAccountArgsV2: { updateAuthority: new PublicKey(RENOUNCED_UPDATE_AUTHORITY), data: null, primarySaleHappened: null, isMutable: false } }
       )
     )
     notes.push('Metadata update authority renounced: name, symbol and image can never be changed again.')
@@ -268,28 +270,42 @@ export async function buildTokenCreation(connection, { payer, form, metadataUri 
 
 /* ------------------------------------------------- transaction size packing */
 
-/** Rough serialised size of one instruction. */
-function instructionSize(ix) {
-  return ix.keys.length * 33 + 32 + (ix.data?.length ?? 0) + 4
+/**
+ * Real wire size of a set of instructions as one transaction.
+ *
+ * We measure by serialising instead of modelling: key accounts are one-byte
+ * indexes into a deduplicated list on the wire, so any model that charges
+ * ~33 bytes per key per instruction over-counts 2x+ — which previously
+ * split a 685-byte creation tx into two, and the second half then failed
+ * review because it depends on state the first half creates.
+ */
+const DUMMY_BLOCKHASH = '11111111111111111111111111111111'
+const DUMMY_PAYER = new PublicKey('11111111111111111111111111111111')
+function packedSize(instructions, payer) {
+  const tx = new Transaction({ recentBlockhash: DUMMY_BLOCKHASH })
+  // A dummy payer that is NOT among the instruction keys can only over-count
+  // one 64-byte signature slot — a conservative bias for a size budget.
+  tx.feePayer = payer ?? DUMMY_PAYER
+  for (const ix of instructions) tx.add(ix)
+  return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length
 }
 
 /**
  * Greedily pack instructions into as few 1232-byte transactions as possible.
- * Two signatures are budgeted for (you + the generated mint keypair).
+ * `payer` (when known) is used for the size measurement; without it a dummy
+ * fee payer is assumed, which can only over-count a signature slot.
  */
-export function packInstructions(instructions, { maxBytes = 1232, overhead = 32 + 3 + 128 + 8 } = {}) {
+export function packInstructions(instructions, { maxBytes = 1232, payer } = {}) {
   const groups = []
   let current = []
-  let size = overhead
   for (const ix of instructions) {
-    const s = instructionSize(ix)
-    if (current.length && size + s > maxBytes) {
+    const next = [...current, ix]
+    if (current.length && packedSize(next, payer) > maxBytes) {
       groups.push(current)
-      current = []
-      size = overhead
+      current = [ix]
+    } else {
+      current = next
     }
-    current.push(ix)
-    size += s
   }
   if (current.length) groups.push(current)
   return groups.map((group) => {

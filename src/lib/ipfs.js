@@ -27,11 +27,19 @@ function extractCid(json) {
   return json?.cid || json?.IpfsHash || json?.ipfsHash || json?.data?.cid || null
 }
 
+/** Pull a human string out of whatever shape Pinata's error body has. */
+function pickMessage(v) {
+  if (!v) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'object') return v.message || v.msg || v.error || JSON.stringify(v)
+  return String(v)
+}
+
 async function readError(res) {
   let detail = ''
   try {
     const body = await res.json()
-    detail = body?.error?.message || body?.error || body?.message || JSON.stringify(body)
+    detail = pickMessage(body?.error?.message ?? body?.error ?? body?.message ?? body) || JSON.stringify(body)
   } catch {
     try {
       detail = (await res.text()).slice(0, 300)
@@ -39,7 +47,13 @@ async function readError(res) {
       detail = res.statusText
     }
   }
-  return `Pinata responded ${res.status}: ${detail}`
+  let msg = `Pinata responded ${res.status}: ${detail}`
+  if (res.status === 401 || res.status === 403) {
+    msg +=
+      ' — Pinata rejected the key. A valid Pinata JWT is a very long string (400+ characters) starting with "eyJ". ' +
+      'In Settings, re-copy the full JWT from pinata.cloud (Account → API Keys); a short hex code is the key ID, not the JWT.'
+  }
+  return msg
 }
 
 /**
