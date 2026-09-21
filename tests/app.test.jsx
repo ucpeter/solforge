@@ -161,4 +161,53 @@ describe('SolForge app', () => {
     clickByText('Stay on devnet')
     await waitUntil(() => !document.body.innerText.includes('Switch to mainnet?'))
   }, 30000)
+
+  it('navigates to Portfolio and shows the disconnected state', async () => {
+    clickByText('Portfolio')
+    const text = () => document.body.innerText
+    await waitUntil(() => text().includes('Wallet Not Connected'))
+    expect(text()).toContain('Connect your wallet to view your portfolio')
+    // The stat cards are still visible with their labels.
+    expect(text()).toContain('SOL balance')
+    expect(text()).toContain('Token holdings')
+    expect(text()).toContain('Tokens created')
+    expect(text()).toContain('Token holdings')
+    expect(text()).toContain('Tokens created')
+  }, 30000)
+
+  it('portfolio: registry tokens show with Manage, and Manage pre-fills the pool form', async () => {
+    // Seed the local registry, then re-enter Portfolio (it re-reads on mount).
+    localStorage.setItem(
+      'solforge.tokens',
+      JSON.stringify([
+        {
+          mint: 'So11111111111111111111111111111111111111112',
+          name: 'Test Coin',
+          symbol: 'TST',
+          decimals: 9,
+          supply: '1000000',
+          program: 'spl',
+          uri: '',
+          signatures: [],
+          createdAt: Date.now(),
+        },
+      ])
+    )
+    const text = () => document.body.innerText
+    clickByText('Create token')
+    // Let the page actually switch (remount) before coming back to Portfolio.
+    await waitUntil(() => text().includes('Token details'))
+    clickByText('Portfolio')
+    await waitUntil(() => text().includes('Test Coin (TST)'))
+    expect(text()).toContain('Tokens created')
+
+    // Manage → Liquidity pool form with the mint pre-filled.
+    clickByText('Manage')
+    await waitUntil(() => text().includes('Create a pool'))
+    const input = [...document.querySelectorAll('input')].find(
+      (i) => i.placeholder === 'or paste a mint address'
+    )
+    expect(input.value).toBe('So11111111111111111111111111111111111111112')
+    localStorage.removeItem('solforge.tokens')
+  }, 60000)
 })
