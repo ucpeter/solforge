@@ -450,6 +450,7 @@ select.input { cursor: pointer; }
 }
 .statcard__label { color: var(--text-mute); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
 .statcard__value { font-size: 22px; font-weight: 650; }
+.statcard__usd { font-size: 13px; color: var(--good); }
 .statcard__hint { color: var(--text-mute); font-size: 12px; }
 
 .hold { display: grid; gap: 7px; padding: 14px 0; border-bottom: 1px solid var(--line); }
@@ -461,4 +462,5 @@ select.input { cursor: pointer; }
   border: 1px solid var(--line); border-radius: 99px; padding: 1px 8px; white-space: nowrap;
 }
 .hold__amt { color: var(--text-dim); font-size: 13px; }
+.hold__usd { color: var(--good); font-weight: 500; }
 .hold__foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }

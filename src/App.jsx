@@ -26,9 +26,11 @@ export default function App() {
 function Shell() {
   const [page, setPage] = useState('create')
   const [manageMint, setManageMint] = useState(null)
+  const [manageTab, setManageTab] = useState(null)
 
-  function openManager(mint) {
-    setManageMint(mint)
+  function openManager(mint, tab) {
+    setManageMint(mint ?? null)
+    setManageTab(tab ?? null)
     setPage('liquidity')
   }
 
@@ -38,10 +40,22 @@ function Shell() {
       <main className="app__main">
         {page === 'create' && <Create />}
         {page === 'liquidity' && (
-          <Liquidity manageMint={manageMint} onManageConsumed={() => setManageMint(null)} />
+          <Liquidity
+            manageMint={manageMint}
+            manageTab={manageTab}
+            onManageConsumed={() => {
+              setManageMint(null)
+              setManageTab(null)
+            }}
+          />
         )}
         {page === 'settings' && <Settings />}
-        {page === 'portfolio' && <Portfolio onManage={openManager} />}
+        {page === 'portfolio' && (
+          <Portfolio
+            onManage={(mint) => openManager(mint, 'create')}
+            onPositions={() => openManager(null, 'positions')}
+          />
+        )}
         {page === 'about' && <About />}
       </main>
       <footer className="app__foot">
