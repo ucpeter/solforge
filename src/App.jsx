@@ -8,6 +8,7 @@ import { NETWORKS, BRAND } from './lib/config.js'
 import { Button, Banner, Modal, Sol } from './components/ui.jsx'
 import Create from './pages/Create.jsx'
 import Liquidity from './pages/Liquidity.jsx'
+import Portfolio from './pages/Portfolio.jsx'
 import Settings from './pages/Settings.jsx'
 import About from './pages/About.jsx'
 import { clsx } from './lib/format.js'
@@ -24,13 +25,23 @@ export default function App() {
 
 function Shell() {
   const [page, setPage] = useState('create')
+  const [manageMint, setManageMint] = useState(null)
+
+  function openManager(mint) {
+    setManageMint(mint)
+    setPage('liquidity')
+  }
+
   return (
     <div className="app">
       <Header page={page} setPage={setPage} />
       <main className="app__main">
         {page === 'create' && <Create />}
-        {page === 'liquidity' && <Liquidity />}
+        {page === 'liquidity' && (
+          <Liquidity manageMint={manageMint} onManageConsumed={() => setManageMint(null)} />
+        )}
         {page === 'settings' && <Settings />}
+        {page === 'portfolio' && <Portfolio onManage={openManager} />}
         {page === 'about' && <About />}
       </main>
       <footer className="app__foot">
@@ -68,6 +79,7 @@ function Header({ page, setPage }) {
           {[
             ['create', 'Create token'],
             ['liquidity', 'Liquidity'],
+            ['portfolio', 'Portfolio'],
             ['settings', 'Settings'],
             ['about', 'About'],
           ].map(([id, label]) => (
