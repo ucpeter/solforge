@@ -79,6 +79,7 @@ export const STORAGE_KEYS = {
   tokens: 'solforge.tokens',
   pools: 'solforge.pools',
   acknowledgedMainnet: 'solforge.mainnet-ack',
+  rpcFallback: 'solforge.rpc-fallback',
 }
 
 /** Every key the app may write, surfaced verbatim in Settings → Local data. */
@@ -89,6 +90,8 @@ export const STORAGE_DESCRIPTIONS = {
   [STORAGE_KEYS.tokens]: 'Registry of tokens you created here (mint, symbol, decimals, program).',
   [STORAGE_KEYS.pools]: 'Registry of pools you created here (pool, position, pair).',
   [STORAGE_KEYS.acknowledgedMainnet]: 'Whether you dismissed the mainnet risk notice.',
+  [STORAGE_KEYS.rpcFallback]:
+    'Which public fallback RPC the app auto-selected per cluster (only used when no custom RPC is set).',
 }
 
 export const DEFAULT_SETTINGS = Object.freeze({

@@ -59,10 +59,25 @@ export async function withRetries(fn, { attempts = 3, baseDelayMs = 1500 } = {})
 
 export function describeError(err) {
   const msg = String(err?.message ?? err ?? 'Unknown error')
+  if (/403|access forbidden/i.test(msg)) {
+    return '403 Access forbidden — this cluster’s public RPC is blocking requests from your network. The app automatically tries other public endpoints; if it keeps failing, set a custom RPC in Settings (a free Helius or Triton key works on mainnet too).'
+  }
+  if (/require[d]? (a |an |personal )?token/i.test(msg)) {
+    return 'This public endpoint only serves users with a token. The app will keep trying other public endpoints; if it keeps failing, set a custom RPC in Settings (a free Helius or Triton key works on mainnet too).'
+  }
   if (/429|too many requests/i.test(msg)) {
     return 'The public devnet RPC rate-limited this request. Tap Retry, or set a custom RPC in Settings — a free Helius or Triton devnet key makes it go away.'
   }
   return msg
+}
+
+/**
+ * True when the RPC itself rejected the request (not a data error): an IP
+ * block (403) or a public endpoint that only serves token holders. Either way
+ * the right reaction is to try the next public endpoint in the chain.
+ */
+export function isEndpointBlocked(err) {
+  return /403|access forbidden|require[d]? (a |an |personal )?token/i.test(String(err?.message ?? err ?? ''))
 }
 
 /* --------------------------------------------------------------- decimals */

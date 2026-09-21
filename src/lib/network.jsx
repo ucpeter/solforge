@@ -4,17 +4,88 @@
  * The original site hardcoded "Gas: 0.00002 SOL · TPS: 3,102" in its footer and
  * never queried anything. Here every figure is fetched from the RPC you chose,
  * stamped with the time it was read, and labelled as such.
+ *
+ * RPC resilience: public cluster RPCs block or rate-limit per IP — the official
+ * mainnet endpoint, for example, returns 403 "Access forbidden" for many phone
+ * networks. When the active endpoint rejects requests (or is unreachable) and
+ * you have NOT set a custom RPC, the app probes the other public endpoints in
+ * the cluster's fallback list and switches to the first one that answers. The
+ * working endpoint is remembered per cluster so the next visit goes straight
+ * to it. A custom RPC from Settings always wins — the app never overrides it.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Connection, clusterApiUrl } from '@solana/web3.js'
-import { NETWORKS, DEFAULT_NETWORK } from './config.js'
+import { Connection } from '@solana/web3.js'
+import { NETWORKS, DEFAULT_NETWORK, STORAGE_KEYS } from './config.js'
 import { loadNetwork, saveNetwork, loadSettings } from './registry.js'
 
 const NetworkContext = createContext(null)
 
-function buildConnection(networkId, customRpc) {
+/**
+ * Extra public endpoints tried (in order) after the cluster default.
+ * All are keyless public RPCs; availability varies by network, which is
+ * exactly why we probe instead of assuming.
+ */
+const EXTRA_PUBLIC = {
+  devnet: ['https://solana-devnet-rpc.publicnode.com'],
+  'mainnet-beta': [
+    // Official alias (a different edge than the default host).
+    'https://api.mainnet.solana.com',
+    'https://endpoints.omniatech.io/v1/sol/mainnet/public',
+    'https://solana-mainnet.public.blastapi.io',
+  ],
+}
+
+function fallbacksFor(networkId) {
   const net = NETWORKS[networkId] ?? NETWORKS[DEFAULT_NETWORK]
-  const endpoint = (customRpc || '').trim() || net.defaultRpc || clusterApiUrl(net.cluster)
+  const list = [net.defaultRpc, ...(EXTRA_PUBLIC[networkId] ?? [])]
+  return [...new Set(list.map((u) => u.trim()).filter(Boolean))]
+}
+
+/* ------------------------------------------------- remembered endpoint */
+
+function loadFallbackMap() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEYS.rpcFallback) || 'null')
+    return raw && typeof raw === 'object' ? raw : {}
+  } catch {
+    return {}
+  }
+}
+function saveFallbackIndex(networkId, idx) {
+  const map = loadFallbackMap()
+  map[networkId] = idx
+  try {
+    localStorage.setItem(STORAGE_KEYS.rpcFallback, JSON.stringify(map))
+  } catch {
+    /* private mode etc. */
+  }
+}
+
+/* --------------------------------------------------------------- probing */
+
+const PROBE_COOLDOWN_MS = 45_000
+
+/** Cheap liveness check: one getSlot with a hard timeout. */
+async function endpointWorks(url) {
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 8_000)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getSlot' }),
+      signal: ctrl.signal,
+    })
+    clearTimeout(t)
+    if (!res.ok) return false
+    const j = await res.json()
+    return typeof j?.result === 'number'
+  } catch {
+    return false
+  }
+}
+
+function buildConnection(endpoint) {
   return new Connection(endpoint, {
     commitment: 'confirmed',
     // Retries matter more than speed when a user is mid-flow and watching a tx.
@@ -22,6 +93,8 @@ function buildConnection(networkId, customRpc) {
     disableRetryOnRateLimit: false,
   })
 }
+
+/* -------------------------------------------------------------- provider */
 
 export function NetworkProvider({ children }) {
   const [networkId, setNetworkId] = useState(() => {
@@ -38,21 +111,57 @@ export function NetworkProvider({ children }) {
       return ''
     }
   })
+  const [fallbackIdx, setFallbackIdx] = useState(() => {
+    const map = loadFallbackMap()
+    const i = Number(map[loadNetworkSafe()])
+    return Number.isInteger(i) && i >= 0 ? i : 0
+  })
   const [stats, setStats] = useState(null)
   const [statsError, setStatsError] = useState(null)
   const [statsFetchedAt, setStatsFetchedAt] = useState(null)
   const [statsLoading, setStatsLoading] = useState(false)
-  const connection = useMemo(() => buildConnection(networkId, rpcOverride), [networkId, rpcOverride])
-  const endpoint = useMemo(
-    () => (rpcOverride || '').trim() || (NETWORKS[networkId]?.defaultRpc ?? clusterApiUrl(networkId)),
-    [networkId, rpcOverride]
-  )
+
+  const custom = (rpcOverride || '').trim()
+  const list = useMemo(() => fallbacksFor(networkId), [networkId])
+  const endpoint = useMemo(() => {
+    if (custom) return custom
+    return list[Math.min(fallbackIdx, list.length - 1)]
+  }, [custom, list, fallbackIdx])
+
+  const connection = useMemo(() => buildConnection(endpoint), [endpoint])
+
+  const endpointSource = custom
+    ? 'your override (Settings)'
+    : Math.min(fallbackIdx, list.length - 1) > 0
+      ? `public fallback ${Math.min(fallbackIdx, list.length - 1) + 1}/${list.length} (auto)`
+      : 'cluster default'
+
+  const lastProbeAt = useRef(0)
+  const probeFallbacks = useCallback(async () => {
+    if (custom) return // a user-chosen RPC is never overridden
+    const now = Date.now()
+    if (now - lastProbeAt.current < PROBE_COOLDOWN_MS) return
+    lastProbeAt.current = now
+    const list = fallbacksFor(networkId)
+    // Try the others first, wrap around.
+    for (let step = 1; step < list.length; step++) {
+      const idx = (fallbackIdx + step) % list.length
+      if (await endpointWorks(list[idx])) {
+        setFallbackIdx(idx)
+        saveFallbackIndex(networkId, idx)
+        return
+      }
+    }
+  }, [custom, networkId, fallbackIdx])
 
   const selectNetwork = useCallback((id) => {
     if (!NETWORKS[id]) return
     saveNetwork(id)
     setNetworkId(id)
     setStats(null)
+    const remembered = loadFallbackMap()[id]
+    const i = Number(remembered)
+    setFallbackIdx(Number.isInteger(i) && i >= 0 ? i : 0)
   }, [])
 
   const setCustomRpc = useCallback((url) => {
@@ -104,10 +213,12 @@ export function NetworkProvider({ children }) {
       setStatsFetchedAt(Date.now())
     } catch (err) {
       setStatsError(err?.message || 'Could not reach the RPC endpoint')
+      // The endpoint may be blocking this network — look for a working one.
+      probeFallbacks()
     } finally {
       setStatsLoading(false)
     }
-  }, [connection])
+  }, [connection, probeFallbacks])
 
   // Fetch once per connection change, then every 30s while the tab is visible.
   const timer = useRef(null)
@@ -126,6 +237,7 @@ export function NetworkProvider({ children }) {
       selectNetwork,
       connection,
       endpoint,
+      endpointSource,
       rpcOverride,
       setCustomRpc,
       stats,
@@ -133,6 +245,7 @@ export function NetworkProvider({ children }) {
       statsFetchedAt,
       statsLoading,
       refreshStats,
+      probeFallbacks,
       isMainnet: networkId === 'mainnet-beta',
     }),
     [
@@ -140,6 +253,7 @@ export function NetworkProvider({ children }) {
       selectNetwork,
       connection,
       endpoint,
+      endpointSource,
       rpcOverride,
       setCustomRpc,
       stats,
@@ -147,10 +261,19 @@ export function NetworkProvider({ children }) {
       statsFetchedAt,
       statsLoading,
       refreshStats,
+      probeFallbacks,
     ]
   )
 
   return <NetworkContext.Provider value={value}>{children}</NetworkContext.Provider>
+}
+
+function loadNetworkSafe() {
+  try {
+    return loadNetwork()
+  } catch {
+    return DEFAULT_NETWORK
+  }
 }
 
 export function useNetwork() {
