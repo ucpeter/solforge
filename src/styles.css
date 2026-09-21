@@ -464,3 +464,6 @@ select.input { cursor: pointer; }
 .hold__amt { color: var(--text-dim); font-size: 13px; }
 .hold__usd { color: var(--good); font-weight: 500; }
 .hold__foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+.sectionerr { display: grid; gap: 10px; padding: 10px 0; }
+.sectionerr p { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
