@@ -4,13 +4,18 @@
  * Everything here is read straight from the chain:
  *   - SOL balance: live from the RPC, plus a USD equivalent fetched live from
  *     CoinGecko (shown only when we actually got a price — never invented)
+ *   - Liquidity positions: your DAMM v2 pools' CURRENT totals (SOL shown with
+ *     its live dollar equivalent) and your unlocked/locked percentages
  *   - Token holdings: every token account the wallet owns, on BOTH the SPL
  *     Token and Token-2022 programs, showing decimals + raw amounts
- *   - Liquidity positions: your DAMM v2 positions, with what the pool
- *     CURRENTLY holds and your unlocked/locked percentages
  *   - Tokens created: the local registry of tokens created through this app
  *     (this device), each with a Manage button that hands the mint to the
  *     Liquidity tab. This is local data, so it shows even without a wallet.
+ *
+ * Rate-limit resilience (public devnet RPCs throttle per IP, and Render's
+ * shared IPs get hammered): each read is cached for 15 seconds, retried with
+ * backoff, and falls back to the last known data if the RPC fails. The two
+ * reads are independent — a failure in one never blanks the other.
  *
  * If a number cannot be read, it is shown as unavailable — never guessed.
  */
@@ -28,18 +33,46 @@ import {
   WSOL,
 } from '../lib/liquidity.js'
 import { solUsdPrice, formatUsd } from '../lib/price.js'
-import { Card, Button, Banner, Empty, Spinner, Sol, Address } from '../components/ui.jsx'
+import { Card, Button, Empty, Spinner, Sol, Address } from '../components/ui.jsx'
 
 const TOKEN_PROGRAMS = [
   [TOKEN_PROGRAM_ID, 'SPL Token'],
   [TOKEN_2022_PROGRAM_ID, 'Token-2022'],
 ]
 
+/* ------------------------------------------------- module-level caches */
+
+const CACHE_TTL_MS = 15_000
+
+// Last good read per network:wallet. Refreshing within the TTL reuses it,
+// which is what stops repeated refreshes from tripping the RPC rate limit.
+const holdingsCache = { key: null, data: null, at: 0 }
+const positionsCache = { key: null, data: null, at: 0 }
+
+// Mint decimals never change — cache them for the life of the page.
+const decimalsCache = {}
+
+function cacheFresh(cache, key) {
+  return cache.key === key && cache.data !== null && Date.now() - cache.at < CACHE_TTL_MS
+    ? cache.data
+    : null
+}
+function cacheStale(cache, key) {
+  return cache.key === key && cache.data !== null ? cache.data : null
+}
+function cacheSet(cache, key, data) {
+  cache.key = key
+  cache.data = data
+  cache.at = Date.now()
+}
+
+/* ------------------------------------------------------------ rpc helpers */
+
 /**
  * Public cluster RPCs rate-limit per IP, and Render's shared IPs get hammered
  * by lots of apps. Retry heavy reads a few times with backoff before giving up.
  */
-async function withRetries(fn, { attempts = 3, baseDelayMs = 1200 } = {}) {
+async function withRetries(fn, { attempts = 3, baseDelayMs = 1500 } = {}) {
   for (let i = 0; i < attempts; i++) {
     try {
       return await fn()
@@ -51,12 +84,30 @@ async function withRetries(fn, { attempts = 3, baseDelayMs = 1200 } = {}) {
   }
 }
 
-async function readMintDecimals(connection, mint) {
+/** Friendly one-liner for the per-card error state. */
+function describeError(err) {
+  const msg = String(err?.message ?? err ?? 'Unknown error')
+  if (/429|too many requests/i.test(msg)) {
+    return 'The public devnet RPC rate-limited this request. Tap Retry, or set a custom RPC in Settings — a free Helius or Triton devnet key makes it go away.'
+  }
+  return msg
+}
+
+async function getMintDecimals(connection, mint) {
+  const s = mint.toBase58()
+  if (decimalsCache[s] !== undefined) return decimalsCache[s]
+  if (WSOL.equals(mint)) {
+    decimalsCache[s] = 9
+    return 9
+  }
   const parsed = await connection.getParsedAccountInfo(mint, { encoding: 'jsonParsed' })
   const d = parsed?.value?.data?.parsed?.info?.decimals
   if (typeof d !== 'number') throw new Error('not a mint')
+  decimalsCache[s] = d
   return d
 }
+
+/* ------------------------------------------------------------------ page */
 
 export default function Portfolio({ onManage, onPositions }) {
   const { connection, network } = useNetwork()
@@ -64,12 +115,14 @@ export default function Portfolio({ onManage, onPositions }) {
   const sdk = useMemo(() => makeSdk(connection), [connection])
 
   const [holdings, setHoldings] = useState(null)
+  const [holdingsError, setHoldingsError] = useState(null)
+  const [holdingsLoading, setHoldingsLoading] = useState(false)
+
   const [positions, setPositions] = useState(null)
   const [positionsError, setPositionsError] = useState(null)
-  const [decimalsByMint, setDecimalsByMint] = useState({})
+  const [positionsLoading, setPositionsLoading] = useState(false)
+
   const [usd, setUsd] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
   const [created] = useState(() => listCreatedTokens())
 
   // Mint (base58) → registry entry, so we can show a real symbol where we have one.
@@ -79,82 +132,130 @@ export default function Portfolio({ onManage, onPositions }) {
     return map
   }, [created])
 
-  const load = useCallback(async () => {
-    if (!wallet.isConnected || !wallet.publicKey) return
-    setLoading(true)
-    setError(null)
-    setPositionsError(null)
+  // Registry decimals are known locally — pre-seed the cache, zero RPC calls.
+  useEffect(() => {
+    for (const t of created) {
+      if (t.mint && Number.isFinite(Number(t.decimals))) decimalsCache[t.mint] = Number(t.decimals)
+    }
+  }, [created])
 
-    try {
-      const batches = await withRetries(() =>
-        Promise.all(
-          TOKEN_PROGRAMS.map(([programId]) =>
-            connection.getParsedTokenAccountsByOwner(wallet.publicKey, { programId }, 'confirmed')
+  const cacheKey = wallet.isConnected ? `${network.id}:${wallet.address}` : null
+
+  /* ------------------------------------------------------- token holdings */
+
+  const loadHoldings = useCallback(
+    async (force = false) => {
+      if (!wallet.isConnected || !wallet.publicKey || !cacheKey) return
+      setHoldingsLoading(true)
+      setHoldingsError(null)
+      try {
+        if (!force) {
+          const cached = cacheFresh(holdingsCache, cacheKey)
+          if (cached) {
+            setHoldings(cached)
+            return
+          }
+        }
+        const batches = await withRetries(() =>
+          Promise.all(
+            TOKEN_PROGRAMS.map(([programId]) =>
+              connection.getParsedTokenAccountsByOwner(wallet.publicKey, { programId }, 'confirmed')
+            )
           )
         )
-      )
-      const rows = []
-      batches.forEach((res, i) => {
-        for (const { pubkey, account } of res.value) {
-          const info = account?.data?.parsed?.info
-          if (!info) continue
-          const amount = BigInt(info.tokenAmount?.amount ?? '0')
-          if (amount === 0n) continue
-          rows.push({
-            account: pubkey.toBase58(),
-            mint: info.mint,
-            decimals: info.tokenAmount.decimals,
-            uiAmount: info.tokenAmount.uiAmountString ?? amount.toString(),
-            amount,
-            programLabel: TOKEN_PROGRAMS[i][1],
-          })
+        const rows = []
+        batches.forEach((res, i) => {
+          for (const { pubkey, account } of res.value) {
+            const info = account?.data?.parsed?.info
+            if (!info) continue
+            const amount = BigInt(info.tokenAmount?.amount ?? '0')
+            if (amount === 0n) continue
+            rows.push({
+              account: pubkey.toBase58(),
+              mint: info.mint,
+              decimals: info.tokenAmount.decimals,
+              uiAmount: info.tokenAmount.uiAmountString ?? amount.toString(),
+              amount,
+              programLabel: TOKEN_PROGRAMS[i][1],
+            })
+          }
+        })
+        rows.sort((a, b) => (a.amount === b.amount ? 0 : a.amount < b.amount ? 1 : -1))
+        cacheSet(holdingsCache, cacheKey, rows)
+        setHoldings(rows)
+        wallet.refreshBalance(connection, wallet.publicKey)
+      } catch (err) {
+        const stale = cacheStale(holdingsCache, cacheKey)
+        if (stale) {
+          setHoldings(stale)
+          setHoldingsError('Showing last known data — the RPC failed on refresh.')
+        } else {
+          setHoldingsError(describeError(err))
         }
-      })
-      rows.sort((a, b) => (a.amount === b.amount ? 0 : a.amount < b.amount ? 1 : -1))
-      setHoldings(rows)
-      wallet.refreshBalance(connection, wallet.publicKey)
-    } catch (err) {
-      setError(err.message)
-    }
-
-    // Positions are best-effort and independent of the holdings read.
-    try {
-      const list = await withRetries(() => readUserPositions(connection, sdk, wallet.publicKey))
-      setPositions(list)
-      const mints = new Set()
-      for (const p of list) {
-        mints.add(p.poolState.tokenAMint.toBase58())
-        mints.add(p.poolState.tokenBMint.toBase58())
+      } finally {
+        setHoldingsLoading(false)
       }
-      const missing = [...mints].filter((m) => !(m in decimalsByMint))
-      if (missing.length) {
-        const out = { ...decimalsByMint }
+    },
+    [connection, wallet, cacheKey]
+  )
+
+  /* ---------------------------------------------------- liquidity positions */
+
+  const loadPositions = useCallback(
+    async (force = false) => {
+      if (!wallet.isConnected || !wallet.publicKey || !cacheKey) return
+      setPositionsLoading(true)
+      setPositionsError(null)
+      try {
+        if (!force) {
+          const cached = cacheFresh(positionsCache, cacheKey)
+          if (cached) {
+            setPositions(cached)
+            return
+          }
+        }
+        const list = await withRetries(() => readUserPositions(connection, sdk, wallet.publicKey))
+        cacheSet(positionsCache, cacheKey, list)
+        setPositions(list)
+        // Warm the decimals cache for the pool mints (usually already known).
         await Promise.all(
-          missing.map(async (m) => {
+          list.flatMap((p) => [p.poolState.tokenAMint, p.poolState.tokenBMint]).map(async (m) => {
             try {
-              out[m] = await readMintDecimals(connection, new PublicKey(m))
+              await getMintDecimals(connection, m)
             } catch {
-              out[m] = 9
+              /* formatting falls back to 9 decimals */
             }
           })
         )
-        setDecimalsByMint(out)
+      } catch (err) {
+        const stale = cacheStale(positionsCache, cacheKey)
+        if (stale) {
+          setPositions(stale)
+          setPositionsError('Showing last known data — the RPC failed on refresh.')
+        } else {
+          setPositionsError(describeError(err))
+        }
+      } finally {
+        setPositionsLoading(false)
       }
-    } catch {
-      setPositionsError(null) // section just hides itself; holdings error is separate
-    }
+    },
+    [connection, sdk, wallet, cacheKey]
+  )
 
-    solUsdPrice({ force: true }).then(setUsd)
-    setLoading(false)
-  }, [connection, wallet, sdk, decimalsByMint])
-
+  // Load both sections when the wallet/network changes (cached = cheap).
   useEffect(() => {
-    setHoldings(null)
-    setError(null)
-    load()
-  }, [load])
+    if (wallet.isConnected) {
+      loadHoldings()
+      loadPositions()
+    } else {
+      setHoldings(null)
+      setPositions(null)
+      setHoldingsError(null)
+      setPositionsError(null)
+    }
+  }, [wallet.isConnected, loadHoldings, loadPositions])
 
-  // Live SOL→USD price on mount (Refresh forces a re-fetch inside load()).
+  // Live SOL→USD price on mount (Refresh forces a re-fetch).
   useEffect(() => {
     let live = true
     solUsdPrice().then((p) => {
@@ -164,6 +265,12 @@ export default function Portfolio({ onManage, onPositions }) {
       live = false
     }
   }, [])
+
+  const refresh = () => {
+    loadHoldings(true)
+    loadPositions(true)
+    solUsdPrice({ force: true }).then(setUsd)
+  }
 
   const nameForMint = (m) => {
     const s = m.toBase58()
@@ -194,18 +301,20 @@ export default function Portfolio({ onManage, onPositions }) {
     )
   }
 
+  /* ----------------------------------------------------------------- view */
+
   return (
     <div className="page">
       <div className="page__head">
         <div>
           <h1 className="page__title">Portfolio</h1>
           <p className="page__sub">
-            Read live from the cluster: real SOL balance, real token accounts, your liquidity
-            positions, and the tokens you created through this app on this device.
+            Read live from the cluster: real SOL balance, your pools with their current totals,
+            your token accounts, and the tokens you created on this device.
           </p>
         </div>
         {wallet.isConnected && (
-          <Button onClick={load} loading={loading}>
+          <Button onClick={refresh} loading={holdingsLoading || positionsLoading}>
             Refresh
           </Button>
         )}
@@ -245,69 +354,29 @@ export default function Portfolio({ onManage, onPositions }) {
         </Card>
       )}
 
-      {error && (
-        <Banner tone="danger" title="Could not read your accounts">
-          {error}
-          <div className="footnote">
-            The public devnet RPC rate-limits frequent requests (especially from shared hosting).
-            Tap Refresh to retry, or set a custom RPC in Settings — a free Helius or Triton devnet
-            key makes this error go away.
-          </div>
-        </Banner>
-      )}
-
       <div className="page__grid">
-        {wallet.isConnected && (
-          <Card
-            title="Token holdings"
-            subtitle="Every token account this wallet owns on this cluster (SPL Token and Token-2022)"
-          >
-            {loading && holdings === null ? (
-              <Spinner label="Reading token accounts…" />
-            ) : holdings && holdings.length === 0 ? (
-              <Empty title="No Tokens Found">
-                <p>You don't have any tokens in this wallet on {network.label}.</p>
-              </Empty>
-            ) : (
-              (holdings ?? []).map((h) => {
-                const t = known.get(h.mint)
-                return (
-                  <div className="hold" key={h.account}>
-                    <div className="hold__id">
-                      <span className="hold__name">
-                        {t ? `${t.name} (${t.symbol})` : `${h.mint.slice(0, 4)}…${h.mint.slice(-4)}`}
-                      </span>
-                      <span className="hold__tag">{h.programLabel}</span>
-                    </div>
-                    <div className="hold__amt">
-                      <strong>{h.uiAmount}</strong>
-                      <span className="muted"> · {h.amount} raw · {h.decimals} decimals</span>
-                    </div>
-                    <div className="hold__foot">
-                      <Address value={h.mint} explorer={network.explorerAddress} label="mint" />
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </Card>
-        )}
-
         {wallet.isConnected && (
           <Card
             title="Liquidity positions"
             subtitle="Live totals for your DAMM v2 pools. “Pool holds” is the pool's current total — you own 100% of this pool, so a 100% withdrawal returns the whole pool at today's price (with other LPs it would pay your share)."
           >
-            {positions === null ? (
+            {positions === null && positionsLoading ? (
               <Spinner label="Reading liquidity positions…" />
-            ) : positions.length === 0 ? (
+            ) : positionsError && positions === null ? (
+              <div className="sectionerr">
+                <p>{positionsError}</p>
+                <Button size="sm" onClick={() => loadPositions(true)}>
+                  Retry
+                </Button>
+              </div>
+            ) : positions && positions.length === 0 ? (
               <Empty title="No liquidity positions">
                 <p>Pools you create in the Liquidity tab will appear here with their live totals.</p>
               </Empty>
             ) : (
-              positions.map((p) => {
-                const dA = decimalsByMint[p.poolState.tokenAMint.toBase58()] ?? 9
-                const dB = decimalsByMint[p.poolState.tokenBMint.toBase58()] ?? 9
+              (positions ?? []).map((p) => {
+                const dA = decimalsCache[p.poolState.tokenAMint.toBase58()] ?? 9
+                const dB = decimalsCache[p.poolState.tokenBMint.toBase58()] ?? 9
                 const liq = positionLiquidity(p.positionState)
                 const total = Number(liq.total.toString()) || 1
                 const pct = (bn) => `${Math.round((Number(bn.toString()) / total) * 100)}%`
@@ -345,6 +414,9 @@ export default function Portfolio({ onManage, onPositions }) {
                         </>
                       )}
                     </div>
+                    {positionsError && (
+                      <div className="footnote">{positionsError}</div>
+                    )}
                     <div className="hold__foot">
                       <Address
                         value={p.position.toBase58()}
@@ -358,6 +430,52 @@ export default function Portfolio({ onManage, onPositions }) {
                   </div>
                 )
               })
+            )}
+          </Card>
+        )}
+
+        {wallet.isConnected && (
+          <Card
+            title="Token holdings"
+            subtitle="Every token account this wallet owns on this cluster (SPL Token and Token-2022)"
+          >
+            {holdings === null && holdingsLoading ? (
+              <Spinner label="Reading token accounts…" />
+            ) : holdingsError && holdings === null ? (
+              <div className="sectionerr">
+                <p>{holdingsError}</p>
+                <Button size="sm" onClick={() => loadHoldings(true)}>
+                  Retry
+                </Button>
+              </div>
+            ) : holdings && holdings.length === 0 ? (
+              <Empty title="No Tokens Found">
+                <p>You don't have any tokens in this wallet on {network.label}.</p>
+              </Empty>
+            ) : (
+              (holdings ?? []).map((h) => {
+                const t = known.get(h.mint)
+                return (
+                  <div className="hold" key={h.account}>
+                    <div className="hold__id">
+                      <span className="hold__name">
+                        {t ? `${t.name} (${t.symbol})` : `${h.mint.slice(0, 4)}…${h.mint.slice(-4)}`}
+                      </span>
+                      <span className="hold__tag">{h.programLabel}</span>
+                    </div>
+                    <div className="hold__amt">
+                      <strong>{h.uiAmount}</strong>
+                      <span className="muted"> · {h.amount} raw · {h.decimals} decimals</span>
+                    </div>
+                    <div className="hold__foot">
+                      <Address value={h.mint} explorer={network.explorerAddress} label="mint" />
+                    </div>
+                  </div>
+                )
+              })
+            )}
+            {holdingsError && holdings !== null && (
+              <div className="footnote">{holdingsError}</div>
             )}
           </Card>
         )}
