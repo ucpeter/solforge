@@ -50,24 +50,28 @@ import {
 import { loadSettings, listCreatedTokens, addCreatedPool } from '../lib/registry.js'
 import { toRawAmount, clsx } from '../lib/format.js'
 
-export default function Liquidity({ manageMint = null, onManageConsumed = () => {} }) {
+export default function Liquidity({
+  manageMint = null,
+  manageTab = null,
+  onManageConsumed = () => {},
+}) {
   const { connection, network } = useNetwork()
   const wallet = useWallet()
   const [settings] = useState(() => loadSettings())
-  const [tab, setTab] = useState('create')
+  const [tab, setTab] = useState(manageTab || 'create')
   // Mint handed over from Portfolio → Manage. Captured at mount so it stays
   // available to CreatePool even after the parent clears it.
   const [initialMint, setInitialMint] = useState(manageMint)
   const sdk = useMemo(() => makeSdk(connection), [connection])
 
-  // Portfolio → Manage handoff: make sure we're on the pool form.
+  // Portfolio → Manage handoff: land on the right tab and pre-fill the mint.
   useEffect(() => {
-    if (manageMint) {
-      setTab('create')
-      setInitialMint(manageMint)
+    if (manageMint || manageTab) {
+      setTab(manageTab ?? 'create')
+      if (manageMint) setInitialMint(manageMint)
       onManageConsumed()
     }
-  }, [manageMint, onManageConsumed])
+  }, [manageMint, manageTab, onManageConsumed])
 
   return (
     <div className="page">
