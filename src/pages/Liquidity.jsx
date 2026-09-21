@@ -50,12 +50,24 @@ import {
 import { loadSettings, listCreatedTokens, addCreatedPool } from '../lib/registry.js'
 import { toRawAmount, clsx } from '../lib/format.js'
 
-export default function Liquidity() {
+export default function Liquidity({ manageMint = null, onManageConsumed = () => {} }) {
   const { connection, network } = useNetwork()
   const wallet = useWallet()
   const [settings] = useState(() => loadSettings())
   const [tab, setTab] = useState('create')
+  // Mint handed over from Portfolio → Manage. Captured at mount so it stays
+  // available to CreatePool even after the parent clears it.
+  const [initialMint, setInitialMint] = useState(manageMint)
   const sdk = useMemo(() => makeSdk(connection), [connection])
+
+  // Portfolio → Manage handoff: make sure we're on the pool form.
+  useEffect(() => {
+    if (manageMint) {
+      setTab('create')
+      setInitialMint(manageMint)
+      onManageConsumed()
+    }
+  }, [manageMint, onManageConsumed])
 
   return (
     <div className="page">
@@ -68,7 +80,7 @@ export default function Liquidity() {
         onChange={setTab}
       />
       {tab === 'create' ? (
-        <CreatePool network={network} sdk={sdk} slippageBps={settings.slippageBps} />
+        <CreatePool network={network} sdk={sdk} slippageBps={settings.slippageBps} initialMint={initialMint} />
       ) : (
         <Positions sdk={sdk} />
       )}
@@ -89,12 +101,12 @@ async function readDecimals(connection, mint) {
   throw new Error('That account exists but is not a token mint.')
 }
 
-function CreatePool({ sdk, slippageBps }) {
+function CreatePool({ sdk, slippageBps, initialMint = null }) {
   const { connection, network } = useNetwork()
   const wallet = useWallet()
 
   const [tokens] = useState(() => listCreatedTokens())
-  const [mintInput, setMintInput] = useState('')
+  const [mintInput, setMintInput] = useState(initialMint || '')
   const [mint, setMint] = useState(null)
   const [decimals, setDecimals] = useState(null)
   const [mintError, setMintError] = useState(null)
