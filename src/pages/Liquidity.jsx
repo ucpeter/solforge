@@ -25,6 +25,7 @@ import {
   Toggle,
 } from '../components/ui.jsx'
 import TxReview from '../components/TxReview.jsx'
+import PoolHoldings from './PoolHoldings.jsx'
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
 import {
@@ -78,6 +79,7 @@ export default function Liquidity({
       <Tabs
         tabs={[
           { id: 'create', label: 'Create a pool' },
+          { id: 'holdings', label: 'Pool holdings' },
           { id: 'positions', label: 'My positions' },
         ]}
         active={tab}
@@ -85,6 +87,8 @@ export default function Liquidity({
       />
       {tab === 'create' ? (
         <CreatePool network={network} sdk={sdk} slippageBps={settings.slippageBps} initialMint={initialMint} />
+      ) : tab === 'holdings' ? (
+        <PoolHoldings sdk={sdk} />
       ) : (
         <Positions sdk={sdk} />
       )}

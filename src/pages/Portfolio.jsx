@@ -20,7 +20,6 @@
  * If a number cannot be read, it is shown as unavailable — never guessed.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PublicKey } from '@solana/web3.js'
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token'
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
@@ -33,6 +32,16 @@ import {
   WSOL,
 } from '../lib/liquidity.js'
 import { solUsdPrice, formatUsd } from '../lib/price.js'
+import {
+  withRetries,
+  describeError,
+  positionsCacheFresh,
+  positionsCacheStale,
+  positionsCacheSet,
+  getMintDecimals,
+  decimalsOf,
+  seedMintDecimals,
+} from '../lib/rpcResilience.js'
 import { Card, Button, Empty, Spinner, Sol, Address } from '../components/ui.jsx'
 
 const TOKEN_PROGRAMS = [
@@ -44,13 +53,11 @@ const TOKEN_PROGRAMS = [
 
 const CACHE_TTL_MS = 15_000
 
-// Last good read per network:wallet. Refreshing within the TTL reuses it,
-// which is what stops repeated refreshes from tripping the RPC rate limit.
+// Last good holdings read per network:wallet. Refreshing within the TTL
+// reuses it, which is what stops repeated refreshes from tripping the RPC
+// rate limit. (The positions read shares its cache with the Pool holdings
+// tab via rpcResilience.js.)
 const holdingsCache = { key: null, data: null, at: 0 }
-const positionsCache = { key: null, data: null, at: 0 }
-
-// Mint decimals never change — cache them for the life of the page.
-const decimalsCache = {}
 
 function cacheFresh(cache, key) {
   return cache.key === key && cache.data !== null && Date.now() - cache.at < CACHE_TTL_MS
@@ -64,47 +71,6 @@ function cacheSet(cache, key, data) {
   cache.key = key
   cache.data = data
   cache.at = Date.now()
-}
-
-/* ------------------------------------------------------------ rpc helpers */
-
-/**
- * Public cluster RPCs rate-limit per IP, and Render's shared IPs get hammered
- * by lots of apps. Retry heavy reads a few times with backoff before giving up.
- */
-async function withRetries(fn, { attempts = 3, baseDelayMs = 1500 } = {}) {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn()
-    } catch (err) {
-      const rateLimited = /429|too many requests/i.test(String(err?.message ?? ''))
-      if (!rateLimited || i === attempts - 1) throw err
-      await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)))
-    }
-  }
-}
-
-/** Friendly one-liner for the per-card error state. */
-function describeError(err) {
-  const msg = String(err?.message ?? err ?? 'Unknown error')
-  if (/429|too many requests/i.test(msg)) {
-    return 'The public devnet RPC rate-limited this request. Tap Retry, or set a custom RPC in Settings — a free Helius or Triton devnet key makes it go away.'
-  }
-  return msg
-}
-
-async function getMintDecimals(connection, mint) {
-  const s = mint.toBase58()
-  if (decimalsCache[s] !== undefined) return decimalsCache[s]
-  if (WSOL.equals(mint)) {
-    decimalsCache[s] = 9
-    return 9
-  }
-  const parsed = await connection.getParsedAccountInfo(mint, { encoding: 'jsonParsed' })
-  const d = parsed?.value?.data?.parsed?.info?.decimals
-  if (typeof d !== 'number') throw new Error('not a mint')
-  decimalsCache[s] = d
-  return d
 }
 
 /* ------------------------------------------------------------------ page */
@@ -134,9 +100,7 @@ export default function Portfolio({ onManage, onPositions }) {
 
   // Registry decimals are known locally — pre-seed the cache, zero RPC calls.
   useEffect(() => {
-    for (const t of created) {
-      if (t.mint && Number.isFinite(Number(t.decimals))) decimalsCache[t.mint] = Number(t.decimals)
-    }
+    for (const t of created) seedMintDecimals(t.mint, Number(t.decimals))
   }, [created])
 
   const cacheKey = wallet.isConnected ? `${network.id}:${wallet.address}` : null
@@ -208,27 +172,23 @@ export default function Portfolio({ onManage, onPositions }) {
       setPositionsError(null)
       try {
         if (!force) {
-          const cached = cacheFresh(positionsCache, cacheKey)
+          const cached = positionsCacheFresh(cacheKey)
           if (cached) {
             setPositions(cached)
             return
           }
         }
         const list = await withRetries(() => readUserPositions(connection, sdk, wallet.publicKey))
-        cacheSet(positionsCache, cacheKey, list)
-        setPositions(list)
         // Warm the decimals cache for the pool mints (usually already known).
         await Promise.all(
-          list.flatMap((p) => [p.poolState.tokenAMint, p.poolState.tokenBMint]).map(async (m) => {
-            try {
-              await getMintDecimals(connection, m)
-            } catch {
-              /* formatting falls back to 9 decimals */
-            }
-          })
+          list.flatMap((p) => [p.poolState.tokenAMint, p.poolState.tokenBMint]).map((m) =>
+            getMintDecimals(connection, m).catch(() => {})
+          )
         )
+        positionsCacheSet(cacheKey, list)
+        setPositions(list)
       } catch (err) {
-        const stale = cacheStale(positionsCache, cacheKey)
+        const stale = positionsCacheStale(cacheKey)
         if (stale) {
           setPositions(stale)
           setPositionsError('Showing last known data — the RPC failed on refresh.')
@@ -375,8 +335,8 @@ export default function Portfolio({ onManage, onPositions }) {
               </Empty>
             ) : (
               (positions ?? []).map((p) => {
-                const dA = decimalsCache[p.poolState.tokenAMint.toBase58()] ?? 9
-                const dB = decimalsCache[p.poolState.tokenBMint.toBase58()] ?? 9
+                const dA = decimalsOf(p.poolState.tokenAMint)
+                const dB = decimalsOf(p.poolState.tokenBMint)
                 const liq = positionLiquidity(p.positionState)
                 const total = Number(liq.total.toString()) || 1
                 const pct = (bn) => `${Math.round((Number(bn.toString()) / total) * 100)}%`
