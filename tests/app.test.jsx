@@ -210,4 +210,16 @@ describe('SolForge app', () => {
     expect(input.value).toBe('So11111111111111111111111111111111111111112')
     localStorage.removeItem('solforge.tokens')
   }, 60000)
+
+  it('liquidity: pool holdings tab exists and shows the disconnected state', async () => {
+    clickByText('Liquidity')
+    const text = () => document.body.innerText
+    await waitUntil(() => text().includes('Create a pool'))
+    clickByText('Pool holdings')
+    await waitUntil(() => text().includes('Connect your wallet to see your pool'))
+    expect(text()).toContain('Wallet Not Connected')
+    // The other two tabs must still be present.
+    expect(text()).toContain('Create a pool')
+    expect(text()).toContain('My positions')
+  }, 30000)
 })
