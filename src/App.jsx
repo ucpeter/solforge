@@ -12,6 +12,7 @@ import Portfolio from './pages/Portfolio.jsx'
 import Settings from './pages/Settings.jsx'
 import About from './pages/About.jsx'
 import { clsx } from './lib/format.js'
+import { describeError } from './lib/rpcResilience.js'
 
 export default function App() {
   return (
@@ -175,13 +176,17 @@ function Header({ page, setPage }) {
           because that is where you can make mistakes for free.
         </p>
         <p>Every transaction will still show you the full instruction list and simulation before you sign.</p>
+        <p className="muted">
+          Mainnet public RPCs are often stricter than devnet. If a read fails, this app automatically tries other
+          public endpoints, and you can add a free Helius key in Settings for a reliable connection.
+        </p>
       </Modal>
     </header>
   )
 }
 
 function NetworkStats() {
-  const { stats, statsLoading, statsError, refreshStats, network } = useNetwork()
+  const { stats, statsLoading, statsError, refreshStats, network, endpoint, endpointSource } = useNetwork()
   const [tick, setTick] = useState(0)
 
   useEffect(() => {
@@ -196,7 +201,10 @@ function NetworkStats() {
 
   if (statsError) {
     return (
-      <span className="netstats netstats--err" title={`${statsError} — click to retry`}>
+      <span
+        className="netstats netstats--err"
+        title={`${describeError(statsError)}\n\nEndpoint: ${endpoint} (${endpointSource}) — click to retry`}
+      >
         <span className="netstats__dot" />
         <button className="linkish" onClick={refreshStats}>
           RPC error
