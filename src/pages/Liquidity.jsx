@@ -49,6 +49,7 @@ import {
   toUi,
 } from '../lib/liquidity.js'
 import { loadSettings, listCreatedTokens, addCreatedPool } from '../lib/registry.js'
+import { withRetries, describeError, isEndpointBlocked } from '../lib/rpcResilience.js'
 import { toRawAmount, clsx } from '../lib/format.js'
 
 export default function Liquidity({
@@ -110,7 +111,7 @@ async function readDecimals(connection, mint) {
 }
 
 function CreatePool({ sdk, slippageBps, initialMint = null }) {
-  const { connection, network } = useNetwork()
+  const { connection, network, probeFallbacks } = useNetwork()
   const wallet = useWallet()
 
   const [tokens] = useState(() => listCreatedTokens())
@@ -139,15 +140,16 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
     setConfigBusy(true)
     setConfigError(null)
     try {
-      const list = await listPoolConfigs(connection)
+      const list = await withRetries(() => listPoolConfigs(connection))
       if (!list.length) setConfigError('No static pool configs found on this cluster.')
       setConfigs(list)
     } catch (err) {
-      setConfigError(err.message)
+      if (isEndpointBlocked(err)) probeFallbacks()
+      setConfigError(describeError(err))
     } finally {
       setConfigBusy(false)
     }
-  }, [connection])
+  }, [connection, probeFallbacks])
 
   useEffect(() => {
     loadConfigs()
@@ -372,7 +374,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
 /* ============================================================ positions */
 
 function Positions({ sdk }) {
-  const { connection, network } = useNetwork()
+  const { connection, network, probeFallbacks } = useNetwork()
   const wallet = useWallet()
 
   const [positions, setPositions] = useState(null)
@@ -387,7 +389,7 @@ function Positions({ sdk }) {
     }
     setError(null)
     try {
-      const list = await readUserPositions(connection, sdk, wallet.publicKey)
+      const list = await withRetries(() => readUserPositions(connection, sdk, wallet.publicKey))
       setPositions(list)
       const mints = new Set()
       for (const p of list) {
@@ -409,9 +411,10 @@ function Positions({ sdk }) {
         setDecimalsByMint(out)
       }
     } catch (err) {
-      setError(err.message)
+      if (isEndpointBlocked(err)) probeFallbacks()
+      setError(describeError(err))
     }
-  }, [connection, sdk, wallet.isConnected, wallet.publicKey, decimalsByMint])
+  }, [connection, sdk, wallet.isConnected, wallet.publicKey, decimalsByMint, probeFallbacks])
 
   useEffect(() => {
     load()
@@ -425,7 +428,15 @@ function Positions({ sdk }) {
     )
   }
 
-  if (error) return <Banner tone="danger">{error}</Banner>
+  if (error)
+    return (
+      <div className="sectionerr">
+        <p>{error}</p>
+        <Button size="sm" onClick={load}>
+          Retry
+        </Button>
+      </div>
+    )
   if (!positions) return <div className="review__busy"><Spinner label="Loading positions…" /></div>
   if (!positions.length)
     return (

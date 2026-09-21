@@ -9,7 +9,7 @@ import { useNetwork } from '../lib/network.jsx'
 import { Address, Banner, Button, Card, Field, KeyValue, Modal, TextInput } from '../components/ui.jsx'
 
 export default function Settings() {
-  const { connection, endpoint, rpcOverride, setCustomRpc, refreshStats } = useNetwork()
+  const { connection, endpoint, endpointSource, setCustomRpc } = useNetwork()
   const [s, setS] = useState(() => loadSettings())
   const [draft, setDraft] = useState(() => ({
     customRpc: loadSettings().customRpc ?? '',
@@ -67,7 +67,7 @@ export default function Settings() {
               dense
               items={[
                 { label: 'RPC endpoint', value: endpoint, mono: true },
-                { label: 'Source', value: rpcOverride ? 'your override (Settings)' : 'cluster default' },
+                { label: 'Source', value: endpointSource },
               ]}
             />
             <div className="form__stack">

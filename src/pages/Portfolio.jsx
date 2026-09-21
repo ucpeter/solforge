@@ -35,6 +35,7 @@ import { solUsdPrice, formatUsd } from '../lib/price.js'
 import {
   withRetries,
   describeError,
+  isEndpointBlocked,
   positionsCacheFresh,
   positionsCacheStale,
   positionsCacheSet,
@@ -76,7 +77,7 @@ function cacheSet(cache, key, data) {
 /* ------------------------------------------------------------------ page */
 
 export default function Portfolio({ onManage, onPositions }) {
-  const { connection, network } = useNetwork()
+  const { connection, network, probeFallbacks } = useNetwork()
   const wallet = useWallet()
   const sdk = useMemo(() => makeSdk(connection), [connection])
 
@@ -149,6 +150,7 @@ export default function Portfolio({ onManage, onPositions }) {
         setHoldings(rows)
         wallet.refreshBalance(connection, wallet.publicKey)
       } catch (err) {
+        if (isEndpointBlocked(err)) probeFallbacks()
         const stale = cacheStale(holdingsCache, cacheKey)
         if (stale) {
           setHoldings(stale)
@@ -160,7 +162,7 @@ export default function Portfolio({ onManage, onPositions }) {
         setHoldingsLoading(false)
       }
     },
-    [connection, wallet, cacheKey]
+    [connection, wallet, cacheKey, probeFallbacks]
   )
 
   /* ---------------------------------------------------- liquidity positions */
@@ -188,6 +190,7 @@ export default function Portfolio({ onManage, onPositions }) {
         positionsCacheSet(cacheKey, list)
         setPositions(list)
       } catch (err) {
+        if (isEndpointBlocked(err)) probeFallbacks()
         const stale = positionsCacheStale(cacheKey)
         if (stale) {
           setPositions(stale)
@@ -199,7 +202,7 @@ export default function Portfolio({ onManage, onPositions }) {
         setPositionsLoading(false)
       }
     },
-    [connection, sdk, wallet, cacheKey]
+    [connection, sdk, wallet, cacheKey, probeFallbacks]
   )
 
   // Load both sections when the wallet/network changes (cached = cheap).

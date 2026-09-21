@@ -18,6 +18,7 @@ import { listCreatedTokens } from '../lib/registry.js'
 import {
   withRetries,
   describeError,
+  isEndpointBlocked,
   positionsCacheFresh,
   positionsCacheStale,
   positionsCacheSet,
@@ -28,7 +29,7 @@ import { solUsdPrice, formatUsd } from '../lib/price.js'
 import { Button, Empty, Spinner, Sol, Select } from '../components/ui.jsx'
 
 export default function PoolHoldings({ sdk }) {
-  const { connection, network } = useNetwork()
+  const { connection, network, probeFallbacks } = useNetwork()
   const wallet = useWallet()
 
   const [list, setList] = useState(null)
@@ -69,6 +70,7 @@ export default function PoolHoldings({ sdk }) {
         positionsCacheSet(cacheKey, l)
         setList(l)
       } catch (err) {
+        if (isEndpointBlocked(err)) probeFallbacks()
         const stale = positionsCacheStale(cacheKey)
         if (stale) {
           setList(stale)
@@ -80,7 +82,7 @@ export default function PoolHoldings({ sdk }) {
         setLoading(false)
       }
     },
-    [connection, sdk, wallet, cacheKey]
+    [connection, sdk, wallet, cacheKey, probeFallbacks]
   )
 
   useEffect(() => {
