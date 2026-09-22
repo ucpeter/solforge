@@ -125,7 +125,11 @@ a:hover { text-decoration: underline; }
 .card + .card { margin-top: 18px; }
 .card--good { border-color: color-mix(in srgb, var(--good) 35%, var(--line)); }
 .card--danger { border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
-.card__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+.card__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .card__head { flex-direction: column; align-items: stretch; gap: 8px; }
+  .card__right { align-self: flex-start; }
+}
 .card__title { margin: 0; font-size: 16.5px; font-weight: 650; }
 .card__subtitle { margin: 3px 0 0; color: var(--text-mute); font-size: 13.5px; }
 .card__right { flex-shrink: 0; }
