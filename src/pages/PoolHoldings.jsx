@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
-import { readUserPositions, toUi, sqrtPriceToPrice, WSOL } from '../lib/liquidity.js'
+import { readUserPositions, toUi, WSOL } from '../lib/liquidity.js'
 import { listCreatedTokens } from '../lib/registry.js'
 import {
   withRetries,
@@ -154,14 +154,6 @@ export default function PoolHoldings({ sdk }) {
   const tokenDec = solIsA ? dB : dA
   const tokenSym = symbolForMint(tokenMint)
 
-  // Pool price is "1 A = price B" in token units. Convert to SOL-per-token.
-  const priceAB = sqrtPriceToPrice(active.poolState.sqrtPrice, dA, dB)
-  const solPerToken = solIsA ? (priceAB > 0 ? 1 / priceAB : 0) : priceAB
-  const tokenUsd =
-    usd !== null && solPerToken > 0
-      ? (Number(tokenRaw.toString()) / 10 ** tokenDec) * solPerToken * usd
-      : null
-
   /* ----------------------------------------------------------------- view */
 
   return (
@@ -209,8 +201,7 @@ export default function PoolHoldings({ sdk }) {
           <span className="statcard__value poolhold__token">
             {toUi(tokenRaw, tokenDec)}
           </span>
-          {tokenUsd !== null && <span className="statcard__usd">≈ {formatUsd(tokenUsd)}</span>}
-          <span className="statcard__hint">valued at the pool's current price</span>
+          <span className="statcard__hint">balance only — your token has no market price yet</span>
         </div>
       </div>
 

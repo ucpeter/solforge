@@ -3,13 +3,15 @@
  * visible way to delete it. No hidden state, no hidden keys.
  */
 import { useState } from 'react'
+import { Connection } from '@solana/web3.js'
 import { BRAND, FEE_POLICY, NETWORKS, STORAGE_DESCRIPTIONS } from '../lib/config.js'
 import { describeStorage, clearAllLocalData, loadSettings, saveSettings, listCreatedTokens, listCreatedPools, removeCreatedToken, removeCreatedPool } from '../lib/registry.js'
 import { useNetwork } from '../lib/network.jsx'
+import { describeError } from '../lib/rpcResilience.js'
 import { Address, Banner, Button, Card, Field, KeyValue, Modal, TextInput } from '../components/ui.jsx'
 
 export default function Settings() {
-  const { connection, endpoint, endpointSource, setCustomRpc } = useNetwork()
+  const { endpoint, endpointSource, setCustomRpc } = useNetwork()
   const [s, setS] = useState(() => loadSettings())
   const [draft, setDraft] = useState(() => ({
     customRpc: loadSettings().customRpc ?? '',
@@ -38,17 +40,27 @@ export default function Settings() {
       slippageBps: Math.min(10000, Math.max(0, Number(draft.slippageBps) || 0)),
     }
     const next = saveSettings(patch)
+    // Activate immediately — the provider picks it up live, no reload needed.
+    setCustomRpc(patch.customRpc)
     setS(next)
     setSaved(true)
     setTimeout(() => setSaved(false), 1600)
   }
 
+  // Test the URL as typed (not the currently-active endpoint), so what you
+  // see is exactly what Save will switch the app to.
   async function testRpc() {
+    const url = (draft.customRpc || '').trim()
+    if (!url) {
+      alert('Paste an RPC URL first (e.g. your Alchemy or Helius endpoint).')
+      return
+    }
     try {
-      const slot = await connection.getSlot()
+      const probe = new Connection(url, { commitment: 'confirmed' })
+      const slot = await probe.getSlot()
       alert(`Connected — current slot ${slot.toLocaleString()}`)
     } catch (err) {
-      alert(`Could not reach that endpoint: ${err.message}`)
+      alert(`Could not reach that endpoint: ${describeError(err)}`)
     }
   }
 
