@@ -186,18 +186,15 @@ function Header({ page, setPage }) {
 }
 
 function NetworkStats() {
-  const { stats, statsLoading, statsError, refreshStats, network, endpoint, endpointSource } = useNetwork()
-  const [tick, setTick] = useState(0)
+  const { stats, statsLoading, statsError, refreshStats, endpoint, endpointSource } = useNetwork()
 
+  // The provider already polls every 30s with the current connection. We only
+  // re-fetch when the endpoint changes (refreshStats identity changes with it),
+  // so a live RPC switch updates the header immediately and never polls a
+  // stale connection.
   useEffect(() => {
     refreshStats()
-    const t = setInterval(() => {
-      refreshStats()
-      setTick((x) => x + 1)
-    }, 15000)
-    return () => clearInterval(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [network.id])
+  }, [refreshStats])
 
   if (statsError) {
     return (
