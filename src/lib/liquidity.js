@@ -133,7 +133,10 @@ export function formatPrice(n, { significant = 6 } = {}) {
   if (v === 0) return '0'
   if (Math.abs(v) >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 2 })
   if (Math.abs(v) >= 1) return v.toFixed(4)
-  return v.toPrecision(significant).replace(/\.?0+e/, 'e')
+  if (Math.abs(v) >= 0.0001) return v.toFixed(6)
+  // For micro-prices like 0.000000003, show standard decimal notation
+  const fixedStr = v.toFixed(10).replace(/0+$/, '')
+  return `${fixedStr} (${v.toPrecision(significant).replace(/\.?0+e/, 'e')})`
 }
 
 /** Raw units → human string (string math, no float drift). */
