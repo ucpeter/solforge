@@ -41,6 +41,27 @@ function fallbacksFor(networkId) {
   return [...new Set(list.map((u) => u.trim()).filter(Boolean))]
 }
 
+/**
+ * Infer the cluster an RPC URL is meant for, from its host.
+ * Returns 'devnet' | 'testnet' | 'mainnet-beta', or null when the URL gives no
+ * hint (self-hosted node, IP address, …) — in which case no warning is shown.
+ *
+ * Why this matters: a custom RPC is ONE URL applied to whichever cluster the
+ * app is on. A mainnet URL used while on devnet cannot see devnet wallets, so
+ * every transaction fails with AccountNotFound. Catch that mix-up loudly.
+ */
+export function inferClusterFromUrl(url) {
+  try {
+    const host = new URL(url.trim()).host.toLowerCase()
+    if (host.includes('devnet')) return 'devnet'
+    if (host.includes('testnet')) return 'testnet'
+    if (host.includes('mainnet')) return 'mainnet-beta'
+    return null
+  } catch {
+    return null
+  }
+}
+
 /* ------------------------------------------------- remembered endpoint */
 
 function loadFallbackMap() {
@@ -104,13 +125,27 @@ export function NetworkProvider({ children }) {
       return DEFAULT_NETWORK
     }
   })
-  const [rpcOverride, setRpcOverride] = useState(() => {
+  const [rpcSettings, setRpcSettings] = useState(() => {
     try {
-      return loadSettings().customRpc || ''
+      const s = loadSettings()
+      return {
+        customRpc: s.customRpc || '',
+        customRpcDevnet: s.customRpcDevnet || '',
+        customRpcMainnet: s.customRpcMainnet || '',
+      }
     } catch {
-      return ''
+      return { customRpc: '', customRpcDevnet: '', customRpcMainnet: '' }
     }
   })
+
+  // Active custom RPC is specific to the current network cluster.
+  // Backward compatibility: if per-cluster setting is not set, use customRpc.
+  const rpcOverride = useMemo(() => {
+    if (networkId === 'mainnet-beta') {
+      return rpcSettings.customRpcMainnet || rpcSettings.customRpc || ''
+    }
+    return rpcSettings.customRpcDevnet || ''
+  }, [networkId, rpcSettings])
   const [fallbackIdx, setFallbackIdx] = useState(() => {
     const map = loadFallbackMap()
     const i = Number(map[loadNetworkSafe()])
@@ -164,9 +199,19 @@ export function NetworkProvider({ children }) {
     setFallbackIdx(Number.isInteger(i) && i >= 0 ? i : 0)
   }, [])
 
-  const setCustomRpc = useCallback((url) => {
-    setRpcOverride(url || '')
-  }, [])
+  const setCustomRpc = useCallback((url, cluster = null) => {
+    const targetCluster = cluster || networkId
+    setRpcSettings((prev) => {
+      const next = { ...prev }
+      if (targetCluster === 'mainnet-beta') {
+        next.customRpcMainnet = url || ''
+        next.customRpc = url || ''
+      } else {
+        next.customRpcDevnet = url || ''
+      }
+      return next
+    })
+  }, [networkId])
 
   /**
    * Real network conditions:

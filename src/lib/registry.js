@@ -110,7 +110,10 @@ export function describeStorage() {
           summary = `${Array.isArray(list) ? list.length : 0} record(s)`
         } else if (key === STORAGE_KEYS.settings) {
           const s = safeParse(raw, {})
-          summary = `custom RPC: ${s.customRpc ? 'set' : 'no'} · Pinata key: ${s.pinataJwt ? 'set' : 'no'}`
+          const hasDev = s.customRpcDevnet ? 'devnet' : ''
+          const hasMain = s.customRpcMainnet || s.customRpc ? 'mainnet' : ''
+          const rpcSummary = [hasDev, hasMain].filter(Boolean).join('+') || 'none'
+          summary = `RPC: ${rpcSummary} · Pinata: ${s.pinataJwt ? 'set' : 'no'}`
         } else {
           summary = raw.length > 40 ? `${raw.slice(0, 40)}…` : raw
         }

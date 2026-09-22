@@ -97,6 +97,9 @@ export const STORAGE_DESCRIPTIONS = {
 export const DEFAULT_SETTINGS = Object.freeze({
   /** Empty = use the cluster's public RPC. Bring your own (e.g. Helius) for better rate limits. */
   customRpc: '',
+  /** Distinct per-cluster custom RPCs so Devnet and Mainnet keys never collide */
+  customRpcDevnet: '',
+  customRpcMainnet: '',
   /** Pinata JWT, used only from this browser, directly to api.pinata.cloud. */
   pinataJwt: '',
   /** microlamports per compute unit. 0 = no priority fee instruction at all. */
