@@ -51,6 +51,7 @@ import {
 import { loadSettings, listCreatedTokens, addCreatedPool } from '../lib/registry.js'
 import { withRetries, describeError, isEndpointBlocked } from '../lib/rpcResilience.js'
 import { toRawAmount, clsx } from '../lib/format.js'
+import { solUsdPrice, formatUsd } from '../lib/price.js'
 
 export default function Liquidity({
   manageMint = null,
@@ -135,6 +136,11 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   const [plan, setPlan] = useState(null)
   const [planning, setPlanning] = useState(false)
   const [planError, setPlanError] = useState(null)
+  const [usdRate, setUsdRate] = useState(null)
+
+  useEffect(() => {
+    solUsdPrice().then(setUsdRate)
+  }, [])
 
   const loadConfigs = useCallback(async () => {
     setConfigBusy(true)
@@ -286,7 +292,17 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
             </div>
             {price !== null && (
               <Banner tone="info">
-                Starting price: 1 token = {formatPrice(price)} SOL (decimal-adjusted).
+                <div>
+                  <strong>Starting price:</strong> 1 token = {formatPrice(price)} SOL
+                  {usdRate !== null && (
+                    <span style={{ marginLeft: '8px', color: 'var(--good)' }}>
+                      (≈ {formatUsd(price * usdRate)})
+                    </span>
+                  )}
+                </div>
+                <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-mute)' }}>
+                  Set by ratio: {Number(solAmount)} SOL ÷ {Number(tokenAmount).toLocaleString()} tokens
+                </div>
               </Banner>
             )}
             <Field label="Pool config" hint="Configs are chosen by the protocol — each one fixes how fees behave.">
