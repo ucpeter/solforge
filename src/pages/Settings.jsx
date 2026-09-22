@@ -2,19 +2,27 @@
  * Settings — everything that lives in this browser, shown as-is, with a
  * visible way to delete it. No hidden state, no hidden keys.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Connection } from '@solana/web3.js'
 import { BRAND, FEE_POLICY, NETWORKS, STORAGE_DESCRIPTIONS } from '../lib/config.js'
 import { describeStorage, clearAllLocalData, loadSettings, saveSettings, listCreatedTokens, listCreatedPools, removeCreatedToken, removeCreatedPool } from '../lib/registry.js'
-import { useNetwork } from '../lib/network.jsx'
+import { useNetwork, inferClusterFromUrl } from '../lib/network.jsx'
 import { describeError } from '../lib/rpcResilience.js'
 import { Address, Banner, Button, Card, Field, KeyValue, Modal, TextInput } from '../components/ui.jsx'
 
 export default function Settings() {
-  const { endpoint, endpointSource, setCustomRpc } = useNetwork()
+  const { networkId, endpoint, endpointSource, setCustomRpc } = useNetwork()
   const [s, setS] = useState(() => loadSettings())
+  const isMainnet = networkId === 'mainnet-beta'
+
+  const initialRpc = () => {
+    const loaded = loadSettings()
+    if (isMainnet) return loaded.customRpcMainnet || loaded.customRpc || ''
+    return loaded.customRpcDevnet || ''
+  }
+
   const [draft, setDraft] = useState(() => ({
-    customRpc: loadSettings().customRpc ?? '',
+    customRpc: initialRpc(),
     pinataJwt: loadSettings().pinataJwt ?? '',
     priorityFeeMicroLamports: String(loadSettings().priorityFeeMicroLamports ?? 0),
     tokenProgram: loadSettings().tokenProgram ?? 'spl',
@@ -26,12 +34,20 @@ export default function Settings() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [cleared, setCleared] = useState(null)
 
+  // Update draft when active network changes
+  useEffect(() => {
+    setDraft((d) => ({ ...d, customRpc: initialRpc() }))
+  }, [networkId])
+
   const tokens = listCreatedTokens()
   const pools = listCreatedPools()
 
   function save() {
+    const trimmedRpc = draft.customRpc.trim()
     const patch = {
-      customRpc: draft.customRpc.trim(),
+      customRpc: isMainnet ? trimmedRpc : (loadSettings().customRpc || ''),
+      customRpcDevnet: isMainnet ? (loadSettings().customRpcDevnet || '') : trimmedRpc,
+      customRpcMainnet: isMainnet ? trimmedRpc : (loadSettings().customRpcMainnet || ''),
       pinataJwt: draft.pinataJwt.trim(),
       priorityFeeMicroLamports: Math.max(0, Number(draft.priorityFeeMicroLamports) || 0),
       tokenProgram: draft.tokenProgram,
@@ -40,8 +56,8 @@ export default function Settings() {
       slippageBps: Math.min(10000, Math.max(0, Number(draft.slippageBps) || 0)),
     }
     const next = saveSettings(patch)
-    // Activate immediately — the provider picks it up live, no reload needed.
-    setCustomRpc(patch.customRpc)
+    // Activate immediately for current cluster
+    setCustomRpc(trimmedRpc, networkId)
     setS(next)
     setSaved(true)
     setTimeout(() => setSaved(false), 1600)
@@ -83,13 +99,39 @@ export default function Settings() {
               ]}
             />
             <div className="form__stack">
-              <Field label="Custom RPC (optional)" hint="e.g. a Helius or Alchemy URL. Stored only in this browser.">
+              <Field
+                label={`Custom RPC for ${isMainnet ? 'Mainnet' : 'Devnet'} (optional)`}
+                hint={`Configured separately for each network. Stored only in this browser.`}
+              >
                 <div className="form__row">
                   <TextInput mono value={draft.customRpc} onChange={(v) => setDraft((d) => ({ ...d, customRpc: v }))} placeholder="https://…" />
                   <Button variant="ghost" onClick={testRpc}>Test</Button>
-                  <Button variant="ghost" onClick={() => setCustomRpc('')}>Reset</Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setDraft((d) => ({ ...d, customRpc: '' }))
+                      const patch = isMainnet
+                        ? { customRpcMainnet: '', customRpc: '' }
+                        : { customRpcDevnet: '' }
+                      saveSettings(patch)
+                      setCustomRpc('', networkId)
+                    }}
+                  >
+                    Reset
+                  </Button>
                 </div>
               </Field>
+              {(() => {
+                const inferred = inferClusterFromUrl(draft.customRpc)
+                if (inferred && inferred !== networkId) {
+                  return (
+                    <Banner tone="warn" title="Cluster mismatch">
+                      This URL looks like a <strong>{inferred === 'mainnet-beta' ? 'Mainnet' : inferred}</strong> endpoint, but SolForge is currently set to <strong>{networkId === 'mainnet-beta' ? 'Mainnet' : networkId}</strong>. A Mainnet RPC cannot see Devnet wallets, causing "AccountNotFound" errors during transactions. Switch the header to the matching network or use an RPC URL for {networkId}.
+                    </Banner>
+                  )
+                }
+                return null
+              })()}
             </div>
           </Card>
 

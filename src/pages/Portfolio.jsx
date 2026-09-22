@@ -300,7 +300,7 @@ export default function Portfolio({ onManage, onPositions }) {
         <div className="statcard">
           <span className="statcard__label">Token holdings</span>
           <span className="statcard__value">{holdings === null ? '…' : holdings.length}</span>
-          <span className="statcard__hint">token accounts with a balance</span>
+          <span className="statcard__hint">distinct tokens in this wallet</span>
         </div>
         <div className="statcard">
           <span className="statcard__label">Tokens created</span>
@@ -399,8 +399,8 @@ export default function Portfolio({ onManage, onPositions }) {
 
         {wallet.isConnected && (
           <Card
-            title="Token holdings"
-            subtitle="Every token account this wallet owns on this cluster (SPL Token and Token-2022)"
+            title="Tokens held in wallet"
+            subtitle="All SPL & Token-2022 tokens held by your connected wallet on this cluster with their live balances."
           >
             {holdings === null && holdingsLoading ? (
               <Spinner label="Reading token accounts…" />
