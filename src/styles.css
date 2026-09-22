@@ -426,11 +426,9 @@ select.input { cursor: pointer; }
   align-items: baseline;
 }
 @media (max-width: 640px) {
-  .storage__row { grid-template-columns: minmax(0, 1fr) auto; }
-  .storage__row code { grid-row: 1; grid-column: 1; overflow-wrap: anywhere; }
-  .storage__row .storage__bytes,
-  .storage__row > .muted { grid-row: 1; grid-column: 2; }
-  .storage__row .storage__desc { grid-row: 2; grid-column: 1 / -1; }
+  .storage__row { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; }
+  .storage__row code { word-break: break-all; }
+  .storage__row .storage__bytes { text-align: left; }
 }
 .storage__row:last-child { border-bottom: 0; }
 .storage__row code { font-family: var(--mono); font-size: 12px; color: var(--accent); }

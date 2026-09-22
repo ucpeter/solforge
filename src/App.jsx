@@ -2,7 +2,7 @@
  * App shell — providers, header, navigation, page switching.
  */
 import { useEffect, useState } from 'react'
-import { NetworkProvider, useNetwork } from './lib/network.jsx'
+import { NetworkProvider, useNetwork, inferClusterFromUrl } from './lib/network.jsx'
 import { WalletProvider, useWallet } from './lib/wallet.jsx'
 import { NETWORKS, BRAND } from './lib/config.js'
 import { Button, Banner, Modal, Sol } from './components/ui.jsx'
@@ -25,6 +25,7 @@ export default function App() {
 }
 
 function Shell() {
+  const { networkId, rpcOverride } = useNetwork()
   const [page, setPage] = useState('create')
   const [manageMint, setManageMint] = useState(null)
   const [manageTab, setManageTab] = useState(null)
@@ -35,9 +36,19 @@ function Shell() {
     setPage('liquidity')
   }
 
+  const customCluster = inferClusterFromUrl(rpcOverride)
+  const hasMismatch = customCluster && customCluster !== networkId
+
   return (
     <div className="app">
       <Header page={page} setPage={setPage} />
+      {hasMismatch && (
+        <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '12px 16px 0' }}>
+          <Banner tone="warn" title="RPC Cluster Mismatch">
+            Your custom RPC is configured for <strong>{customCluster === 'mainnet-beta' ? 'Mainnet' : customCluster}</strong>, but SolForge is currently set to <strong>{networkId === 'mainnet-beta' ? 'Mainnet' : networkId}</strong>. Transactions will fail with "AccountNotFound" because {customCluster} cannot see {networkId} wallets. Go to <button className="linkish" onClick={() => setPage('settings')} style={{ textDecoration: 'underline', fontWeight: 600 }}>Settings</button> to reset it or switch networks.
+          </Banner>
+        </div>
+      )}
       <main className="app__main">
         {page === 'create' && <Create />}
         {page === 'liquidity' && (
