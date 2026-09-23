@@ -277,8 +277,13 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
               </div>
               {mintError && <Banner tone="danger">{mintError}</Banner>}
               {mint && decimals !== null && (
-                <Banner tone="good">
-                  Resolved: {mint.toBase58()} · {decimals} decimals
+                <Banner tone="good" title="Resolved on-chain">
+                  <div>
+                    <Address value={mint.toBase58()} explorer={network.explorerAddress} />
+                  </div>
+                  <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-dim)' }}>
+                    Token exists · {decimals} decimals
+                  </div>
                 </Banner>
               )}
             </Field>
