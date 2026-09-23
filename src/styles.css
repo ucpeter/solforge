@@ -237,7 +237,7 @@ select.input { cursor: pointer; }
 .banner--warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 9%, var(--bg-3)); }
 .banner--danger { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); background: color-mix(in srgb, var(--bad) 10%, var(--bg-3)); }
 .banner__title { display: block; margin-bottom: 3px; }
-.banner__body { flex: 1; min-width: 0; }
+.banner__body { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .banner__close { background: none; border: 0; color: var(--text-mute); font-size: 18px; cursor: pointer; line-height: 1; }
 .ack { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; font-size: 13px; color: var(--text); }
 .ack input { margin-top: 3px; }
