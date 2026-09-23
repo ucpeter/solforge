@@ -150,8 +150,8 @@ describe('SolForge app', () => {
     const mintInput = inputs.find((i) => i.placeholder === 'or paste a mint address')
     // WSOL exists on the local cluster — this exercises real decimal resolution.
     setNative(mintInput, 'So11111111111111111111111111111111111111112')
-    await waitUntil(() => text().includes('Resolved:') || text().includes('does not exist'), { timeoutMs: 30000 })
-    expect(text().includes('· 9 decimals')).toBe(true)
+    await waitUntil(() => text().includes('Resolved') || text().includes('does not exist'), { timeoutMs: 30000 })
+    expect(text().includes('9 decimals')).toBe(true)
   }, 60000)
 
   it('mainnet switch requires confirmation', async () => {
