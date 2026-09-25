@@ -115,7 +115,11 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   const { connection, network, probeFallbacks } = useNetwork()
   const wallet = useWallet()
 
-  const [tokens] = useState(() => listCreatedTokens())
+  const [tokens, setTokens] = useState(() => listCreatedTokens(network.id))
+
+  useEffect(() => {
+    setTokens(listCreatedTokens(network.id))
+  }, [network.id])
   const [mintInput, setMintInput] = useState(initialMint || '')
   const [mint, setMint] = useState(null)
   const [decimals, setDecimals] = useState(null)
@@ -137,6 +141,8 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   const [planning, setPlanning] = useState(false)
   const [planError, setPlanError] = useState(null)
   const [usdRate, setUsdRate] = useState(null)
+  const [walletTokenBalance, setWalletTokenBalance] = useState(null)
+  const [walletTokenLoading, setWalletTokenLoading] = useState(false)
 
   useEffect(() => {
     solUsdPrice().then(setUsdRate)
@@ -167,6 +173,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
       setMint(null)
       setDecimals(null)
       setMintError(null)
+      setWalletTokenBalance(null)
       return
     }
     let cancelled = false
@@ -179,6 +186,26 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
         if (!cancelled) {
           setMint(pk)
           setDecimals(d)
+        }
+        if (wallet.publicKey && !cancelled) {
+          setWalletTokenLoading(true)
+          try {
+            const parsed = await connection.getParsedTokenAccountsByOwner(
+              wallet.publicKey,
+              { mint: pk },
+              'confirmed'
+            )
+            let total = 0n
+            for (const { account } of parsed.value) {
+              const raw = BigInt(account?.data?.parsed?.info?.tokenAmount?.amount ?? '0')
+              total += raw
+            }
+            if (!cancelled) setWalletTokenBalance(total)
+          } catch {
+            if (!cancelled) setWalletTokenBalance(null)
+          } finally {
+            if (!cancelled) setWalletTokenLoading(false)
+          }
         }
       } catch (err) {
         if (!cancelled) setMintError(err.message)
@@ -240,6 +267,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   async function onSent(results) {
     addCreatedPool({
       pool: plan.pool.toBase58(),
+      networkId: network.id,
       positionNftMint: plan.positionNft.publicKey.toBase58(),
       tokenMint: mint.toBase58(),
       tokenAmount: tokenRaw,
@@ -288,11 +316,51 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
               )}
             </Field>
             <div className="form__row">
-              <Field label={`Token amount (${decimals ?? '—'} decimals)`}>
+              <Field
+                label={`Token amount (${decimals ?? '—'} decimals)`}
+                hint={
+                  walletTokenBalance !== null && decimals !== null ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-mute)', marginRight: '2px' }}>
+                        Dev hold presets:
+                      </span>
+                      {[
+                        { label: '100% (0% dev)', pct: 100 },
+                        { label: '99% (1% dev)', pct: 99 },
+                        { label: '98% (2% dev)', pct: 98 },
+                        { label: '95% (5% dev)', pct: 95 },
+                      ].map((preset) => (
+                        <button
+                          key={preset.pct}
+                          type="button"
+                          className="btn btn--ghost btn--sm"
+                          style={{
+                            padding: '3px 8px',
+                            fontSize: '11.5px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--line-2)',
+                            background: 'var(--bg-4)',
+                          }}
+                          onClick={() => {
+                            const rawDeposit = (walletTokenBalance * BigInt(preset.pct)) / 100n
+                            setTokenAmount(toUi(rawDeposit, decimals, { precision: 9 }))
+                          }}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : walletTokenLoading ? (
+                    'Checking wallet token balance…'
+                  ) : (
+                    'Amount of tokens to deposit into the liquidity pool.'
+                  )
+                }
+              >
                 <TextInput value={tokenAmount} onChange={setTokenAmount} placeholder="e.g. 1000000" />
               </Field>
-              <Field label="SOL amount">
-                <TextInput value={solAmount} onChange={setSolAmount} placeholder="e.g. 10" />
+              <Field label="SOL amount" hint="Amount of SOL to pair against the tokens in the pool.">
+                <TextInput value={solAmount} onChange={setSolAmount} placeholder="e.g. 3" />
               </Field>
             </div>
             {price !== null && (
