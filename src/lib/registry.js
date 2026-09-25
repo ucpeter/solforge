@@ -52,9 +52,15 @@ function writeList(key, list) {
   return list
 }
 
-/** Tokens created through this app, newest first. */
-export function listCreatedTokens() {
-  return readList(STORAGE_KEYS.tokens)
+/** Tokens created through this app, newest first. Filtered by cluster when specified. */
+export function listCreatedTokens(networkId = null) {
+  const all = readList(STORAGE_KEYS.tokens)
+  if (!networkId) return all
+  return all.filter((t) => {
+    // Legacy entries without explicit cluster tag default to devnet (where all initial testing was done)
+    const cluster = t.networkId || 'devnet'
+    return cluster === networkId
+  })
 }
 
 export function addCreatedToken(entry) {
@@ -70,13 +76,18 @@ export function removeCreatedToken(mint) {
   )
 }
 
-export function getTokenByMint(mint) {
-  return listCreatedTokens().find((t) => t.mint === mint) || null
+export function getTokenByMint(mint, networkId = null) {
+  return listCreatedTokens(networkId).find((t) => t.mint === mint) || null
 }
 
-/** Pools created through this app, newest first. */
-export function listCreatedPools() {
-  return readList(STORAGE_KEYS.pools)
+/** Pools created through this app, newest first. Filtered by cluster when specified. */
+export function listCreatedPools(networkId = null) {
+  const all = readList(STORAGE_KEYS.pools)
+  if (!networkId) return all
+  return all.filter((p) => {
+    const cluster = p.networkId || 'devnet'
+    return cluster === networkId
+  })
 }
 
 export function addCreatedPool(entry) {
