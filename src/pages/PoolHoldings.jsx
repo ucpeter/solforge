@@ -37,7 +37,11 @@ export default function PoolHoldings({ sdk }) {
   const [loading, setLoading] = useState(false)
   const [pick, setPick] = useState(0)
   const [usd, setUsd] = useState(null)
-  const [created] = useState(() => listCreatedTokens())
+  const [created, setCreated] = useState(() => listCreatedTokens(network.id))
+
+  useEffect(() => {
+    setCreated(listCreatedTokens(network.id))
+  }, [network.id])
 
   const symbolForMint = (m) => {
     const s = m.toBase58()

@@ -220,6 +220,7 @@ export default function Create() {
   async function onSent(results) {
     addCreatedToken({
       mint: plan.mint.toBase58(),
+      networkId: network.id,
       name: form.name.trim(),
       symbol: form.symbol.trim().toUpperCase(),
       decimals: Number(form.decimals),

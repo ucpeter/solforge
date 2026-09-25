@@ -39,8 +39,8 @@ export default function Settings() {
     setDraft((d) => ({ ...d, customRpc: initialRpc() }))
   }, [networkId])
 
-  const tokens = listCreatedTokens()
-  const pools = listCreatedPools()
+  const tokens = listCreatedTokens(networkId)
+  const pools = listCreatedPools(networkId)
 
   function save() {
     const trimmedRpc = draft.customRpc.trim()

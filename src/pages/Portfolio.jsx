@@ -90,7 +90,11 @@ export default function Portfolio({ onManage, onPositions }) {
   const [positionsLoading, setPositionsLoading] = useState(false)
 
   const [usd, setUsd] = useState(null)
-  const [created] = useState(() => listCreatedTokens())
+  const [created, setCreated] = useState(() => listCreatedTokens(network.id))
+
+  useEffect(() => {
+    setCreated(listCreatedTokens(network.id))
+  }, [network.id])
 
   // Mint (base58) → registry entry, so we can show a real symbol where we have one.
   const known = useMemo(() => {
