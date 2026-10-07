@@ -1,11 +1,11 @@
 /**
  * Clone — Clone Trending Tokens from DexScreener or paste any Solana token address.
- * Offers tabs for:
- * 1. "🔥 General Trending" (top boosted)
- * 2. "⚡ New Trending" (freshly launched within 24-48h)
- * 3. "💊 Pump.fun Trending" (live trending Pump.fun coins)
+ * Categories:
+ * 1. "🔥 General" (top boosted, 50+ tokens)
+ * 2. "⚡ New Pairs" (freshly launched within 24-48h, 50+ tokens)
+ * 3. "💊 Pump.fun" (ranked by live buy activity, last buy recency indicator, 50+ tokens)
  *
- * Sticky header keeps category switch buttons fixed while list scrolls independently.
+ * Pinned sticky header with independent smooth scrolling token list.
  */
 import { useEffect, useState } from 'react'
 import { Banner, Button, Card, Field, Spinner, TextInput } from '../components/ui.jsx'
@@ -31,7 +31,7 @@ export default function Clone({ onClone }) {
     setLoadingTrending(true)
     setTrendingError(null)
     try {
-      const list = await fetchTrendingSolanaTokens(cat, 50)
+      const list = await fetchTrendingSolanaTokens(cat, 60)
       setTrending(list)
     } catch (err) {
       setTrendingError('Could not load trending tokens from DexScreener.')
@@ -75,7 +75,7 @@ export default function Clone({ onClone }) {
         <div>
           <h1 className="page__title">Copy Trending Tokens</h1>
           <p className="page__sub">
-            Clone any live trending, newly launched, or Pump.fun token with its logo, name, ticker, and metadata, then launch your own token on Solana with 0 platform fees.
+            Clone any live trending, newly launched, or active Pump.fun token with its logo, name, ticker, and metadata, then launch your own token on Solana with 0 platform fees.
           </p>
         </div>
         <Button variant="ghost" onClick={() => loadTrending(category)} disabled={loadingTrending}>
@@ -161,8 +161,14 @@ export default function Clone({ onClone }) {
         {/* Right Column: Trending Feed with Category Tabs */}
         <div className="page__col">
           <Card
-            title="Solana Trending Tokens"
-            subtitle="Browse live trending, newly launched, or Pump.fun tokens. Tap Clone to copy directly into Creator."
+            title={`Solana Trending Tokens (${trending.length})`}
+            subtitle={
+              category === 'pump'
+                ? 'Ranked by highest live buy activity on Pump.fun with last purchase recency.'
+                : category === 'new'
+                ? 'Freshly launched pairs created within the last 24–48 hours.'
+                : 'Highest boosted tokens by market momentum on DexScreener.'
+            }
           >
             {/* Sticky Header Container */}
             <div
@@ -200,12 +206,12 @@ export default function Clone({ onClone }) {
                   onClick={() => setCategory('pump')}
                   style={{ whiteSpace: 'nowrap' }}
                 >
-                  💊 Pump.fun
+                  💊 Pump.fun (Buy Volume)
                 </button>
               </div>
             </div>
 
-            {loadingTrending && <Spinner label={`Loading ${category === 'pump' ? 'Pump.fun trending' : category === 'new' ? 'newly launched' : 'trending'} tokens…`} />}
+            {loadingTrending && <Spinner label={`Loading ${category === 'pump' ? 'most active Pump.fun' : category === 'new' ? 'newly launched' : 'trending'} tokens…`} />}
             {trendingError && (
               <div className="sectionerr">
                 <p>{trendingError}</p>
@@ -276,6 +282,20 @@ export default function Clone({ onClone }) {
                             </span>
                           )}
                         </div>
+
+                        {/* Buy Activity & Recency for Pump.fun or active tokens */}
+                        {category === 'pump' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', marginTop: '4px', flexWrap: 'wrap' }}>
+                            <span style={{ color: '#10b981', fontWeight: 600 }}>
+                              🛒 {t.buys5m > 0 ? `${t.buys5m} buys (5m)` : `${t.buys1h} buys (1h)`}
+                            </span>
+                            <span style={{ color: 'var(--text-mute)' }}>•</span>
+                            <span style={{ color: t.lastBuyFormatted.includes('5m') ? '#10b981' : 'var(--text-mute)' }}>
+                              ⚡ Last buy: {t.lastBuyFormatted}
+                            </span>
+                          </div>
+                        )}
+
                         {t.description && (
                           <div className="muted" style={{ fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '280px', marginTop: '2px' }}>
                             {t.description}
