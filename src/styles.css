@@ -495,3 +495,18 @@ select.input { cursor: pointer; }
 .poolhold__id { font-family: var(--mono); font-size: 13px; color: var(--text-mute); margin: 0 0 14px; }
 .poolhold__token { font-size: 20px; overflow-wrap: anywhere; }
 .poolhold__note { margin-top: 4px; }
+
+/* ------------------------------------------------------------ clone page */
+.clone-card {
+  padding: 16px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+}
+.clone-item {
+  transition: border-color 0.15s, background 0.15s;
+}
+.clone-item:hover {
+  background: var(--bg-4);
+  border-color: var(--line-2);
+}

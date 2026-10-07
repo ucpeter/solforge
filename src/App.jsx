@@ -11,6 +11,7 @@ import Liquidity from './pages/Liquidity.jsx'
 import Portfolio from './pages/Portfolio.jsx'
 import Settings from './pages/Settings.jsx'
 import About from './pages/About.jsx'
+import Clone from './pages/Clone.jsx'
 import { clsx } from './lib/format.js'
 import { describeError } from './lib/rpcResilience.js'
 
@@ -29,6 +30,12 @@ function Shell() {
   const [page, setPage] = useState('create')
   const [manageMint, setManageMint] = useState(null)
   const [manageTab, setManageTab] = useState(null)
+  const [pendingClone, setPendingClone] = useState(null)
+
+  function startClone(tokenData) {
+    setPendingClone(tokenData)
+    setPage('create')
+  }
 
   function openManager(mint, tab) {
     setManageMint(mint ?? null)
@@ -50,7 +57,13 @@ function Shell() {
         </div>
       )}
       <main className="app__main">
-        {page === 'create' && <Create />}
+        {page === 'create' && (
+          <Create
+            initialClone={pendingClone}
+            onClearClone={() => setPendingClone(null)}
+          />
+        )}
+        {page === 'clone' && <Clone onClone={startClone} />}
         {page === 'liquidity' && (
           <Liquidity
             manageMint={manageMint}
@@ -104,6 +117,7 @@ function Header({ page, setPage }) {
         <nav className="hdr__nav" aria-label="Main">
           {[
             ['create', 'Create token'],
+            ['clone', 'Copy trending'],
             ['liquidity', 'Liquidity'],
             ['portfolio', 'Portfolio'],
             ['settings', 'Settings'],
