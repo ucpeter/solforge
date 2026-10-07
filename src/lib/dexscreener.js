@@ -1,73 +1,91 @@
 /**
  * DexScreener Public API integration for trending token cloning.
  * Supports:
- * - 'general': top active boosts on DexScreener (highest overall momentum/volume)
- * - 'new': strictly freshly created tokens (created within the last 24–48 hours, sorted newest first)
- * - 'pump': live trending tokens launched directly on Pump.fun (ending in 'pump')
+ * - 'general': top active boosts on DexScreener (highest overall momentum/volume, 50+ tokens)
+ * - 'new': strictly freshly created tokens (created within 24–48 hours, sorted newest first, 50+ tokens)
+ * - 'pump': live trending tokens launched directly on Pump.fun (ending in 'pump'), ranked by real-time buy activity (5m/1h/24h) with last buy recency indicator (50+ tokens)
  */
 import { compactUsd } from './format.js'
 
-export async function fetchTrendingSolanaTokens(category = 'general', limit = 50) {
+export async function fetchTrendingSolanaTokens(category = 'general', limit = 60) {
   try {
-    let endpoints = []
-    if (category === 'new') {
-      endpoints = [
-        'https://api.dexscreener.com/token-boosts/latest/v1',
-        'https://api.dexscreener.com/token-profiles/latest/v1',
-      ]
-    } else if (category === 'pump') {
-      // For Pump.fun, scan all latest boosts, top boosts, and new profiles
-      endpoints = [
-        'https://api.dexscreener.com/token-boosts/latest/v1',
-        'https://api.dexscreener.com/token-boosts/top/v1',
-        'https://api.dexscreener.com/token-profiles/latest/v1',
-      ]
-    } else {
-      // General trending combines top boosts with latest boosts
-      endpoints = [
-        'https://api.dexscreener.com/token-boosts/top/v1',
-        'https://api.dexscreener.com/token-boosts/latest/v1',
-      ]
-    }
+    const candidateAddresses = new Set()
+    const addressToItem = new Map()
 
-    const responses = await Promise.all(
-      endpoints.map((ep) =>
+    // 1. Fetch from DexScreener official boost & profile streams
+    const streamEndpoints = [
+      'https://api.dexscreener.com/token-boosts/top/v1',
+      'https://api.dexscreener.com/token-boosts/latest/v1',
+      'https://api.dexscreener.com/token-profiles/latest/v1',
+    ]
+
+    const streamResults = await Promise.all(
+      streamEndpoints.map((ep) =>
         fetch(ep, { headers: { 'User-Agent': 'Mozilla/5.0' } })
           .then((r) => (r.ok ? r.json() : []))
           .catch(() => [])
       )
     )
 
-    const allItems = responses.flat()
-
-    // Deduplicate unique Solana token addresses
-    const seen = new Set()
-    const solanaTokens = []
-    const itemMetaMap = new Map()
-
-    for (const item of allItems) {
-      if (item.chainId === 'solana' && item.tokenAddress && !seen.has(item.tokenAddress)) {
-        if (category === 'pump') {
-          // Strictly Pump.fun mint addresses ending in 'pump'
-          if (!item.tokenAddress.toLowerCase().endsWith('pump')) {
-            continue
-          }
+    for (const item of streamResults.flat()) {
+      const addr = item.tokenAddress
+      if (item.chainId === 'solana' && addr) {
+        if (category === 'pump' && !addr.toLowerCase().endsWith('pump')) {
+          continue
         }
-        seen.add(item.tokenAddress)
-        solanaTokens.push(item)
-        itemMetaMap.set(item.tokenAddress, item)
+        if (!candidateAddresses.has(addr)) {
+          candidateAddresses.add(addr)
+          addressToItem.set(addr, item)
+        }
       }
     }
 
-    // We scan candidate tokens
-    const candidateSlice = solanaTokens.slice(0, 90)
-    if (candidateSlice.length === 0) return []
+    // 2. If Pump.fun or General/New needs more candidate depth (to guarantee 50+ tokens), search top Solana DEX pairs
+    const searchQueries =
+      category === 'pump'
+        ? ['pump', 'solana pump', 'pump.fun', 'raydium pump', 'ai pump', 'pepe pump', 'cat pump', 'dog pump']
+        : ['solana', 'raydium', 'sol', 'ai', 'meme', 'trump', 'cat', 'dog', 'pepe']
 
-    // Batch fetch pair details, creation timestamps, symbols, names, and market caps
-    const addresses = candidateSlice.map((t) => t.tokenAddress)
+    if (candidateAddresses.size < 70) {
+      const searchResults = await Promise.all(
+        searchQueries.map((q) =>
+          fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          })
+            .then((r) => (r.ok ? r.json() : { pairs: [] }))
+            .catch(() => ({ pairs: [] }))
+        )
+      )
+
+      for (const res of searchResults) {
+        for (const pair of res.pairs || []) {
+          const addr = pair.baseToken?.address
+          if (pair.chainId === 'solana' && addr) {
+            if (category === 'pump' && !addr.toLowerCase().endsWith('pump')) {
+              continue
+            }
+            if (!candidateAddresses.has(addr)) {
+              candidateAddresses.add(addr)
+              addressToItem.set(addr, {
+                tokenAddress: addr,
+                icon: pair.info?.imageUrl || pair.info?.openGraph || '',
+                description: pair.info?.description || '',
+                url: pair.url,
+              })
+            }
+          }
+        }
+      }
+    }
+
+    const allCandidateList = Array.from(candidateAddresses)
+    if (allCandidateList.length === 0) return []
+
+    // 3. Batch query pair details, volume, transactions, creation timestamps, and market caps
+    // Using chunks of 30 for DexScreener's /tokens/v1/solana/{addresses}
     const chunks = []
-    for (let i = 0; i < addresses.length; i += 30) {
-      chunks.push(addresses.slice(i, i + 30))
+    for (let i = 0; i < allCandidateList.length; i += 30) {
+      chunks.push(allCandidateList.slice(i, i + 30))
     }
 
     const pairMap = new Map()
@@ -92,7 +110,7 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
             }
           }
         } catch (e) {
-          console.warn('Batch pair fetch failed:', e)
+          console.warn('Batch pair fetch error:', e)
         }
       })
     )
@@ -100,10 +118,12 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
     const now = Date.now()
     const mapped = []
 
-    for (const item of candidateSlice) {
-      const pair = pairMap.get(item.tokenAddress) || {}
+    for (const addr of allCandidateList) {
+      const item = addressToItem.get(addr) || {}
+      const pair = pairMap.get(addr) || {}
       const base = pair.baseToken || {}
       const info = pair.info || {}
+      const txns = pair.txns || {}
 
       let iconUrl = info.imageUrl || info.openGraph || ''
       if (!iconUrl && item.icon) {
@@ -119,8 +139,25 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
       const symbol = base.symbol || ''
       const name = base.name || symbol || ''
 
+      const m5Buys = txns.m5?.buys || 0
+      const h1Buys = txns.h1?.buys || 0
+      const h6Buys = txns.h6?.buys || 0
+      const h24Buys = txns.h24?.buys || 0
+
+      // Calculate last buy recency indicator based on real-time transaction buckets
+      let lastBuyFormatted = 'inactive'
+      if (m5Buys > 0) {
+        lastBuyFormatted = '< 5m ago'
+      } else if (h1Buys > 0) {
+        lastBuyFormatted = '< 1h ago'
+      } else if (h6Buys > 0) {
+        lastBuyFormatted = '< 6h ago'
+      } else if (h24Buys > 0) {
+        lastBuyFormatted = '< 24h ago'
+      }
+
       mapped.push({
-        tokenAddress: item.tokenAddress,
+        tokenAddress: addr,
         name,
         symbol,
         description: item.description || info.description || '',
@@ -130,11 +167,31 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
         createdAt,
         ageMs,
         ageFormatted: formatAge(createdAt),
-        url: pair.url || item.url || `https://dexscreener.com/solana/${item.tokenAddress}`,
+        url: pair.url || item.url || `https://dexscreener.com/solana/${addr}`,
         totalBoosts: item.totalAmount || item.amount || 0,
         links: info.socials || item.links || [],
-        isPump: item.tokenAddress.toLowerCase().endsWith('pump'),
+        isPump: addr.toLowerCase().endsWith('pump'),
+        buys5m: m5Buys,
+        buys1h: h1Buys,
+        buys24h: h24Buys,
+        lastBuyFormatted,
       })
+    }
+
+    if (category === 'pump') {
+      // Sort strictly by buy activity:
+      // 1. Highest 5m buy activity
+      // 2. Highest 1h buy activity
+      // 3. Highest 24h buy activity
+      // 4. Highest market cap
+      return mapped
+        .sort((a, b) => {
+          if (b.buys5m !== a.buys5m) return b.buys5m - a.buys5m
+          if (b.buys1h !== a.buys1h) return b.buys1h - a.buys1h
+          if (b.buys24h !== a.buys24h) return b.buys24h - a.buys24h
+          return (b.marketCap || 0) - (a.marketCap || 0)
+        })
+        .slice(0, limit)
     }
 
     if (category === 'new') {
@@ -143,7 +200,7 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
         .filter((t) => t.createdAt && t.ageMs !== null && t.ageMs <= MAX_AGE_MS)
         .sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0))
 
-      if (freshlyCreated.length >= 10) {
+      if (freshlyCreated.length >= 50) {
         return freshlyCreated.slice(0, limit)
       }
       return mapped
@@ -152,17 +209,7 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
         .slice(0, limit)
     }
 
-    if (category === 'pump') {
-      // Sort Pump.fun tokens by newest launch / highest activity
-      return mapped
-        .sort((a, b) => {
-          if (a.ageMs && b.ageMs) return a.ageMs - b.ageMs
-          return (b.marketCap || 0) - (a.marketCap || 0)
-        })
-        .slice(0, limit)
-    }
-
-    // General trending: keeps top boosted order
+    // General trending: keeps top boosted / volume order
     return mapped.slice(0, limit)
   } catch (err) {
     console.error('Failed to fetch trending tokens from DexScreener:', err)
@@ -200,6 +247,7 @@ export async function fetchTokenDetailsByAddress(address) {
 
     const base = pair.baseToken || {}
     const info = pair.info || {}
+    const txns = pair.txns || {}
 
     let twitter = ''
     let telegram = ''
@@ -222,6 +270,13 @@ export async function fetchTokenDetailsByAddress(address) {
     const mcap = pair.marketCap || pair.fdv || null
     const createdAt = pair.pairCreatedAt || null
 
+    const m5Buys = txns.m5?.buys || 0
+    const h1Buys = txns.h1?.buys || 0
+    let lastBuyFormatted = 'inactive'
+    if (m5Buys > 0) lastBuyFormatted = '< 5m ago'
+    else if (h1Buys > 0) lastBuyFormatted = '< 1h ago'
+    else if ((txns.h24?.buys || 0) > 0) lastBuyFormatted = '< 24h ago'
+
     return {
       name: base.name || '',
       symbol: base.symbol || '',
@@ -231,6 +286,9 @@ export async function fetchTokenDetailsByAddress(address) {
       marketCapFormatted: mcap ? compactUsd(mcap) : null,
       createdAt,
       ageFormatted: formatAge(createdAt),
+      buys5m: m5Buys,
+      buys1h: h1Buys,
+      lastBuyFormatted,
       description: info.description || '',
       twitter,
       telegram,
