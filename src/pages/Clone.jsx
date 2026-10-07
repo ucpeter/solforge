@@ -25,7 +25,7 @@ export default function Clone({ onClone }) {
     setLoadingTrending(true)
     setTrendingError(null)
     try {
-      const list = await fetchTrendingSolanaTokens(12)
+      const list = await fetchTrendingSolanaTokens(60)
       setTrending(list)
     } catch (err) {
       setTrendingError('Could not load trending tokens from DexScreener.')
@@ -123,6 +123,11 @@ export default function Clone({ onClone }) {
                             MCap: {inspectedToken.marketCapFormatted}
                           </span>
                         )}
+                        {inspectedToken.ageFormatted && (
+                          <span style={{ background: 'var(--bg-2)', color: 'var(--text-mute)', fontSize: '12px', padding: '2px 8px', borderRadius: '99px', border: '1px solid var(--line-2)' }}>
+                            Age: {inspectedToken.ageFormatted}
+                          </span>
+                        )}
                       </div>
                       <div className="muted" style={{ fontSize: '12px', fontFamily: 'var(--mono)', marginTop: '3px' }}>
                         {shorthead(inspectedToken.address)}
@@ -197,6 +202,11 @@ export default function Clone({ onClone }) {
                           {t.marketCapFormatted && (
                             <span style={{ fontSize: '11px', color: 'var(--good)', background: 'var(--bg-4)', padding: '1px 6px', borderRadius: '4px' }}>
                               {t.marketCapFormatted}
+                            </span>
+                          )}
+                          {t.ageFormatted && (
+                            <span style={{ fontSize: '11px', color: 'var(--text-mute)', background: 'var(--bg-2)', padding: '1px 6px', borderRadius: '4px', border: '1px solid var(--line-2)' }}>
+                              🕒 {t.ageFormatted}
                             </span>
                           )}
                         </div>

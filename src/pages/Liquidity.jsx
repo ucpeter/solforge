@@ -130,6 +130,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   const [solAmount, setSolAmount] = useState('')
   const [lock, setLock] = useState(false)
   const [slippage, setSlippage] = useState(String(slippageBps ?? 0))
+  const [destination, setDestination] = useState('meteora') // 'meteora' | 'pumpfun' | 'raydium'
 
   const [configs, setConfigs] = useState(null)
   const [configError, setConfigError] = useState(null)
@@ -286,8 +287,80 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   return (
     <div className="page__grid page__grid--2col">
       <div className="page__col">
-        <Card title="Pair" subtitle="Your token against wrapped SOL, on Meteora DAMM v2.">
-          <div className="form__stack">
+        <Card
+          title="Launchpad & Liquidity Destination"
+          subtitle="Choose where your liquidity pool or bonding curve will be deployed."
+        >
+          <div className="seg" style={{ marginBottom: '16px' }}>
+            <button
+              type="button"
+              className={clsx('seg__btn', destination === 'meteora' && 'seg__btn--on')}
+              onClick={() => setDestination('meteora')}
+            >
+              Meteora DAMM v2
+            </button>
+            <button
+              type="button"
+              className={clsx('seg__btn', destination === 'pumpfun' && 'seg__btn--on')}
+              onClick={() => setDestination('pumpfun')}
+            >
+              Pump.fun (0 SOL)
+            </button>
+            <button
+              type="button"
+              className={clsx('seg__btn', destination === 'raydium' && 'seg__btn--on')}
+              onClick={() => setDestination('raydium')}
+            >
+              Raydium CP-MM
+            </button>
+          </div>
+
+          {destination === 'meteora' && (
+            <Banner tone="info">
+              <strong>Meteora DAMM v2:</strong> Dynamic fee AMM with 100% LP ownership, full withdrawal control anytime, and permanent lock options.
+            </Banner>
+          )}
+
+          {destination === 'pumpfun' && (
+            <Banner tone="warn" title="Pump.fun Launchpad (0 SOL)">
+              <div>
+                Tokens deploy into Pump.fun's virtual curve with <strong>0 initial SOL</strong> required.
+                When buyers contribute ~85 SOL, Pump.fun automatically migrates the pool to PumpSwap and burns the LP.
+              </div>
+              <div style={{ marginTop: '8px' }}>
+                <a
+                  href="https://pump.fun/create"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn--secondary btn--sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  Deploy on Pump.fun directly ↗
+                </a>
+              </div>
+            </Banner>
+          )}
+
+          {destination === 'raydium' && (
+            <Banner tone="info" title="Raydium CP-MM">
+              <div>
+                Standard Raydium liquidity pool. Requires 0.15 SOL Raydium pool creation fee + initial paired SOL.
+              </div>
+              <div style={{ marginTop: '8px' }}>
+                <a
+                  href="https://raydium.io/liquidity/create/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn--secondary btn--sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  Open Raydium Pool Creator ↗
+                </a>
+              </div>
+            </Banner>
+          )}
+
+          <div className="form__stack" style={{ marginTop: '16px' }}>
             <Field label="Token" hint="Pick one you created here, or paste any mint address.">
               {tokens.length > 0 && (
                 <Select
