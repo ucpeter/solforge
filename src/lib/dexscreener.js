@@ -4,46 +4,75 @@
  */
 import { compactUsd } from './format.js'
 
-export async function fetchTrendingSolanaTokens(limit = 12) {
+export async function fetchTrendingSolanaTokens(limit = 60) {
   try {
-    // 1. Fetch top boosted tokens
-    const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
-    if (!Array.isArray(data)) return []
+    // 1. Fetch from multiple endpoints concurrently to get 50+ unique Solana tokens
+    const [topRes, latestRes, profilesRes] = await Promise.all([
+      fetch('https://api.dexscreener.com/token-boosts/top/v1').catch(() => null),
+      fetch('https://api.dexscreener.com/token-boosts/latest/v1').catch(() => null),
+      fetch('https://api.dexscreener.com/token-profiles/latest/v1').catch(() => null),
+    ])
 
-    // Filter to Solana chain only and pick top items with valid token addresses
-    const solanaTokens = data
-      .filter((item) => item.chainId === 'solana' && item.tokenAddress)
-      .slice(0, limit)
+    const [topData, latestData, profilesData] = await Promise.all([
+      topRes && topRes.ok ? topRes.json().catch(() => []) : [],
+      latestRes && latestRes.ok ? latestRes.json().catch(() => []) : [],
+      profilesRes && profilesRes.ok ? profilesRes.json().catch(() => []) : [],
+    ])
 
-    if (solanaTokens.length === 0) return []
+    const allItems = [
+      ...(Array.isArray(topData) ? topData : []),
+      ...(Array.isArray(latestData) ? latestData : []),
+      ...(Array.isArray(profilesData) ? profilesData : []),
+    ]
 
-    const addresses = solanaTokens.map((t) => t.tokenAddress)
-
-    // 2. Batch fetch real token details, pairs, logos, and market caps
-    let pairMap = new Map()
-    try {
-      const pairsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addresses.join(',')}`)
-      if (pairsRes.ok) {
-        const pairsData = await pairsRes.json()
-        for (const p of pairsData.pairs || []) {
-          const addr = p.baseToken?.address
-          if (addr && (!pairMap.has(addr) || (p.marketCap || 0) > (pairMap.get(addr).marketCap || 0))) {
-            pairMap.set(addr, p)
-          }
-        }
+    // Filter to Solana chain and unique token addresses
+    const seen = new Set()
+    const solanaTokens = []
+    for (const item of allItems) {
+      if (item.chainId === 'solana' && item.tokenAddress && !seen.has(item.tokenAddress)) {
+        seen.add(item.tokenAddress)
+        solanaTokens.push(item)
       }
-    } catch (e) {
-      console.warn('Failed to fetch detailed pair info:', e)
     }
 
-    return solanaTokens.map((item) => {
+    const slice = solanaTokens.slice(0, limit)
+    if (slice.length === 0) return []
+
+    // 2. Batch fetch pair details, market caps, and created timestamps in chunks of 30
+    const addresses = slice.map((t) => t.tokenAddress)
+    const chunks = []
+    for (let i = 0; i < addresses.length; i += 30) {
+      chunks.push(addresses.slice(i, i + 30))
+    }
+
+    const pairMap = new Map()
+    await Promise.all(
+      chunks.map(async (chunk) => {
+        try {
+          const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`)
+          if (res.ok) {
+            const data = await res.json()
+            for (const p of data.pairs || []) {
+              const addr = p.baseToken?.address
+              if (addr) {
+                const prev = pairMap.get(addr)
+                if (!prev || (p.marketCap || 0) > (prev.marketCap || 0)) {
+                  pairMap.set(addr, p)
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Batch pair fetch failed:', e)
+        }
+      })
+    )
+
+    return slice.map((item) => {
       const pair = pairMap.get(item.tokenAddress) || {}
       const base = pair.baseToken || {}
       const info = pair.info || {}
 
-      // Robust image resolution: pair info imageUrl -> openGraph -> CDN fallback
       let iconUrl = info.imageUrl || info.openGraph || ''
       if (!iconUrl && item.icon) {
         iconUrl = item.icon.startsWith('http')
@@ -52,6 +81,7 @@ export async function fetchTrendingSolanaTokens(limit = 12) {
       }
 
       const mcap = pair.marketCap || pair.fdv || null
+      const createdAt = pair.pairCreatedAt || null
 
       return {
         tokenAddress: item.tokenAddress,
@@ -61,6 +91,8 @@ export async function fetchTrendingSolanaTokens(limit = 12) {
         icon: iconUrl,
         marketCap: mcap,
         marketCapFormatted: mcap ? compactUsd(mcap) : null,
+        createdAt,
+        ageFormatted: formatAge(createdAt),
         url: pair.url || item.url || `https://dexscreener.com/solana/${item.tokenAddress}`,
         totalBoosts: item.totalAmount || item.amount || 0,
         links: info.socials || item.links || [],
@@ -70,6 +102,19 @@ export async function fetchTrendingSolanaTokens(limit = 12) {
     console.error('Failed to fetch trending tokens from DexScreener:', err)
     return []
   }
+}
+
+export function formatAge(timestamp) {
+  if (!timestamp) return null
+  const now = Date.now()
+  const diffMs = Math.max(0, now - Number(timestamp))
+  const minutes = Math.floor(diffMs / 60000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
 }
 
 export async function fetchTokenDetailsByAddress(address) {
@@ -107,6 +152,7 @@ export async function fetchTokenDetailsByAddress(address) {
 
     let imageUrl = info.imageUrl || info.openGraph || ''
     const mcap = pair.marketCap || pair.fdv || null
+    const createdAt = pair.pairCreatedAt || null
 
     return {
       name: base.name || '',
@@ -115,6 +161,8 @@ export async function fetchTokenDetailsByAddress(address) {
       imageUrl,
       marketCap: mcap,
       marketCapFormatted: mcap ? compactUsd(mcap) : null,
+      createdAt,
+      ageFormatted: formatAge(createdAt),
       description: info.description || '',
       twitter,
       telegram,
