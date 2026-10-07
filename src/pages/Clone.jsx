@@ -1,13 +1,14 @@
 /**
  * Clone — Clone Trending Tokens from DexScreener or paste any Solana token address.
- * Inspects name, symbol, logo image, description, and socials, and launches into SolForge.
+ * Offers tabs for "General Trending" (top boosted) and "New Trending" (newly launched/boosted).
  */
 import { useEffect, useState } from 'react'
 import { Banner, Button, Card, Field, Spinner, TextInput } from '../components/ui.jsx'
 import { fetchTrendingSolanaTokens, fetchTokenDetailsByAddress } from '../lib/dexscreener.js'
-import { shorten } from '../lib/format.js'
+import { shorten, clsx } from '../lib/format.js'
 
 export default function Clone({ onClone }) {
+  const [category, setCategory] = useState('general') // 'general' | 'new'
   const [trending, setTrending] = useState([])
   const [loadingTrending, setLoadingTrending] = useState(true)
   const [trendingError, setTrendingError] = useState(null)
@@ -18,14 +19,14 @@ export default function Clone({ onClone }) {
   const [inspectedToken, setInspectedToken] = useState(null)
 
   useEffect(() => {
-    loadTrending()
-  }, [])
+    loadTrending(category)
+  }, [category])
 
-  async function loadTrending() {
+  async function loadTrending(cat = category) {
     setLoadingTrending(true)
     setTrendingError(null)
     try {
-      const list = await fetchTrendingSolanaTokens(60)
+      const list = await fetchTrendingSolanaTokens(cat, 50)
       setTrending(list)
     } catch (err) {
       setTrendingError('Could not load trending tokens from DexScreener.')
@@ -69,11 +70,11 @@ export default function Clone({ onClone }) {
         <div>
           <h1 className="page__title">Copy Trending Tokens</h1>
           <p className="page__sub">
-            Clone any live trending token from DexScreener with its logo, name, ticker, and metadata, then launch your own token on Solana with 0 platform fees.
+            Clone any live trending or newly launched token from DexScreener with its logo, name, ticker, and metadata, then launch your own token on Solana with 0 platform fees.
           </p>
         </div>
-        <Button variant="ghost" onClick={loadTrending} disabled={loadingTrending}>
-          {loadingTrending ? 'Refreshing…' : 'Refresh Trending'}
+        <Button variant="ghost" onClick={() => loadTrending(category)} disabled={loadingTrending}>
+          {loadingTrending ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -125,7 +126,7 @@ export default function Clone({ onClone }) {
                         )}
                         {inspectedToken.ageFormatted && (
                           <span style={{ background: 'var(--bg-2)', color: 'var(--text-mute)', fontSize: '12px', padding: '2px 8px', borderRadius: '99px', border: '1px solid var(--line-2)' }}>
-                            Age: {inspectedToken.ageFormatted}
+                            🕒 {inspectedToken.ageFormatted}
                           </span>
                         )}
                       </div>
@@ -152,19 +153,40 @@ export default function Clone({ onClone }) {
           </Card>
         </div>
 
-        {/* Right Column: Live Trending Feed from DexScreener */}
+        {/* Right Column: Trending Feed with Category Tabs */}
         <div className="page__col">
-          <Card title="Live Trending on Solana" subtitle="Real-time top boosted coins on DexScreener. Tap any coin to clone its metadata.">
-            {loadingTrending && <Spinner label="Loading live trending tokens from DexScreener…" />}
+          <Card
+            title="DexScreener Trending"
+            subtitle="Browse live trending or newly launched Solana meme coins. Tap any coin to clone."
+          >
+            {/* Category Switcher: General vs New Trending */}
+            <div className="seg" style={{ marginBottom: '14px' }}>
+              <button
+                type="button"
+                className={clsx('seg__btn', category === 'general' && 'seg__btn--on')}
+                onClick={() => setCategory('general')}
+              >
+                🔥 General Trending (Top Boosted)
+              </button>
+              <button
+                type="button"
+                className={clsx('seg__btn', category === 'new' && 'seg__btn--on')}
+                onClick={() => setCategory('new')}
+              >
+                ⚡ New Trending (Recently Launched)
+              </button>
+            </div>
+
+            {loadingTrending && <Spinner label={`Loading ${category === 'new' ? 'newly launched' : 'trending'} tokens from DexScreener…`} />}
             {trendingError && (
               <div className="sectionerr">
                 <p>{trendingError}</p>
-                <Button size="sm" onClick={loadTrending}>Retry</Button>
+                <Button size="sm" onClick={() => loadTrending(category)}>Retry</Button>
               </div>
             )}
 
             {!loadingTrending && trending.length === 0 && !trendingError && (
-              <p className="muted">No trending Solana tokens found right now.</p>
+              <p className="muted">No tokens found in this category right now.</p>
             )}
 
             {!loadingTrending && trending.length > 0 && (
