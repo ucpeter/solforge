@@ -87,6 +87,7 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
       if (initialClone.imageUrl) {
         setImageUri(initialClone.imageUrl)
       }
+      setMetaMode('build')
       onClearClone()
     }
   }, [initialClone])
@@ -221,9 +222,13 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
   const [plan, setPlan] = useState(null)
   const [txs, setTxs] = useState([])
 
-  const ready = formOk && Boolean(metadataUri) && wallet.isConnected
+  const ready = formOk && Boolean(metadataUri?.trim()) && wallet.isConnected
 
   async function openReview() {
+    if (!metadataUri?.trim()) {
+      alert('Please complete the metadata step first by clicking "Upload metadata JSON to Pinata" or pasting a valid metadata URI.')
+      return
+    }
     setPlanning(true)
     try {
       const p = await buildTokenCreation(connection, { payer: wallet.publicKey, form, metadataUri })

@@ -17,7 +17,6 @@ export default function Clone({ onClone }) {
   const [inspectError, setInspectError] = useState(null)
   const [inspectedToken, setInspectedToken] = useState(null)
 
-  // Load trending tokens on mount
   useEffect(() => {
     loadTrending()
   }, [])
@@ -104,27 +103,35 @@ export default function Clone({ onClone }) {
               {inspectError && <Banner tone="danger">{inspectError}</Banner>}
 
               {inspectedToken && (
-                <div className="clone-card" style={{ marginTop: '12px' }}>
+                <div className="clone-card" style={{ marginTop: '14px', padding: '14px', background: 'var(--bg-3)', border: '1px solid var(--line)', borderRadius: '12px' }}>
                   <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
-                    {inspectedToken.imageUrl && (
+                    {inspectedToken.imageUrl ? (
                       <img
                         src={inspectedToken.imageUrl}
                         alt={inspectedToken.symbol}
-                        style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', background: 'var(--bg-3)' }}
+                        style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', background: 'var(--bg-4)', flexShrink: 0 }}
                       />
+                    ) : (
+                      <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'var(--bg-4)', flexShrink: 0 }} />
                     )}
-                    <div>
-                      <div style={{ fontSize: '17px', fontWeight: 700 }}>
-                        {inspectedToken.name} <span style={{ color: 'var(--accent)' }}>(${inspectedToken.symbol})</span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span>{inspectedToken.name || 'Unnamed'}</span>
+                        <span style={{ color: 'var(--accent)', fontSize: '15px' }}>(${inspectedToken.symbol || '???'})</span>
+                        {inspectedToken.marketCapFormatted && (
+                          <span style={{ background: 'var(--bg-4)', color: 'var(--good)', fontSize: '12px', padding: '2px 8px', borderRadius: '99px', border: '1px solid var(--line-2)' }}>
+                            MCap: {inspectedToken.marketCapFormatted}
+                          </span>
+                        )}
                       </div>
-                      <div className="muted" style={{ fontSize: '12.5px', fontFamily: 'var(--mono)', marginTop: '2px' }}>
+                      <div className="muted" style={{ fontSize: '12px', fontFamily: 'var(--mono)', marginTop: '3px' }}>
                         {shorthead(inspectedToken.address)}
                       </div>
                     </div>
                   </div>
 
                   {inspectedToken.description && (
-                    <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: '10px 0 6px', lineHeight: 1.5 }}>
+                    <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: '12px 0 6px', lineHeight: 1.5 }}>
                       {inspectedToken.description}
                     </p>
                   )}
@@ -142,7 +149,7 @@ export default function Clone({ onClone }) {
 
         {/* Right Column: Live Trending Feed from DexScreener */}
         <div className="page__col">
-          <Card title="Live Trending on Solana" subtitle="Real-time top boosted coins on DexScreener right now. Tap any coin to inspect and clone.">
+          <Card title="Live Trending on Solana" subtitle="Real-time top boosted coins on DexScreener. Tap any coin to clone its metadata.">
             {loadingTrending && <Spinner label="Loading live trending tokens from DexScreener…" />}
             {trendingError && (
               <div className="sectionerr">
@@ -166,28 +173,35 @@ export default function Clone({ onClone }) {
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       gap: '12px',
-                      padding: '10px 12px',
+                      padding: '12px',
                       background: 'var(--bg-3)',
                       border: '1px solid var(--line)',
                       borderRadius: '10px',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
                       {t.icon ? (
                         <img
                           src={t.icon}
                           alt=""
-                          style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--bg-4)' }}
+                          onError={(e) => { e.currentTarget.style.display = 'none' }}
+                          style={{ width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--bg-4)' }}
                         />
                       ) : (
-                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--bg-4)', flexShrink: 0 }} />
+                        <div style={{ width: '42px', height: '42px', borderRadius: '50%', background: 'var(--bg-4)', flexShrink: 0 }} />
                       )}
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 650, fontSize: '13.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {shorten(t.tokenAddress, 6, 6)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 650, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span>{t.name || shorten(t.tokenAddress, 6, 4)}</span>
+                          {t.symbol && <span style={{ color: 'var(--accent)', fontSize: '13px' }}>(${t.symbol})</span>}
+                          {t.marketCapFormatted && (
+                            <span style={{ fontSize: '11px', color: 'var(--good)', background: 'var(--bg-4)', padding: '1px 6px', borderRadius: '4px' }}>
+                              {t.marketCapFormatted}
+                            </span>
+                          )}
                         </div>
                         {t.description && (
-                          <div className="muted" style={{ fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
+                          <div className="muted" style={{ fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '280px', marginTop: '2px' }}>
                             {t.description}
                           </div>
                         )}
@@ -195,10 +209,14 @@ export default function Clone({ onClone }) {
                     </div>
                     <Button
                       size="sm"
-                      variant="secondary"
+                      variant="primary"
                       onClick={() => {
-                        setCustomAddress(t.tokenAddress)
-                        handleInspect(t.tokenAddress)
+                        handleLaunch({
+                          name: t.name,
+                          symbol: t.symbol,
+                          description: t.description,
+                          imageUrl: t.icon,
+                        })
                       }}
                     >
                       Clone
