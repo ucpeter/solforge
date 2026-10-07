@@ -9,6 +9,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
 
 const WalletContext = createContext(null)
+const LAST_WALLET_KEY = 'solforge.last_wallet_id'
+
 
 /** Every provider we know how to talk to, in display order. */
 function detectProviders() {
@@ -42,20 +44,35 @@ export function WalletProvider({ children }) {
 
   // Providers inject asynchronously; keep looking for a moment after mount.
   useEffect(() => {
-    if (providers.length) return
     let tries = 0
     const id = setInterval(() => {
       tries += 1
       const found = detectProviders()
-      if (found.length) {
+      if (found.length > 0) {
         setProviders(found)
+        // Eager auto-reconnect if user had connected earlier
+        const lastId = localStorage.getItem(LAST_WALLET_KEY)
+        if (lastId && !activeId) {
+          const matched = found.find((p) => p.id === lastId) || found[0]
+          if (matched && typeof matched.provider.connect === 'function') {
+            matched.provider.connect({ onlyIfTrusted: true }).then((res) => {
+              const pk = res?.publicKey ?? matched.provider.publicKey
+              if (pk) {
+                setActiveId(matched.id)
+                setPublicKey(new PublicKey(pk.toBase58 ? pk.toBase58() : pk))
+              }
+            }).catch(() => {
+              /* silent failure if wallet is locked or not trusted yet */
+            })
+          }
+        }
         clearInterval(id)
-      } else if (tries > 20) {
+      } else if (tries > 25) {
         clearInterval(id)
       }
-    }, 250)
+    }, 200)
     return () => clearInterval(id)
-  }, [providers.length])
+  }, [activeId])
 
   const active = useMemo(
     () => providers.find((p) => p.id === activeId) ?? null,
@@ -70,6 +87,7 @@ export function WalletProvider({ children }) {
     setActiveId(null)
     setPublicKey(null)
     setBalance(null)
+    try { localStorage.removeItem(LAST_WALLET_KEY) } catch {}
     try {
       await provider?.disconnect?.()
     } catch {
@@ -96,6 +114,7 @@ export function WalletProvider({ children }) {
         if (!pk) throw new Error('The wallet connected but returned no public key.')
         setActiveId(chosen.id)
         setPublicKey(new PublicKey(pk.toBase58 ? pk.toBase58() : pk))
+        try { localStorage.setItem(LAST_WALLET_KEY, chosen.id) } catch {}
 
         const onAccountChanged = (newPk) => {
           if (!newPk) {

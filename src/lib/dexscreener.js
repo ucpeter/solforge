@@ -2,9 +2,11 @@
  * DexScreener Public API integration for trending token cloning.
  * Free, keyless endpoints with ~60-300 req/min limits.
  */
+import { compactUsd } from './format.js'
 
 export async function fetchTrendingSolanaTokens(limit = 12) {
   try {
+    // 1. Fetch top boosted tokens
     const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
@@ -15,18 +17,53 @@ export async function fetchTrendingSolanaTokens(limit = 12) {
       .filter((item) => item.chainId === 'solana' && item.tokenAddress)
       .slice(0, limit)
 
-    return solanaTokens.map((item) => {
-      let iconUrl = item.icon
-      if (iconUrl && !iconUrl.startsWith('http')) {
-        iconUrl = `https://cdn.dexscreener.com/cms/images/${iconUrl}?width=120&height=120&quality=90&format=auto`
+    if (solanaTokens.length === 0) return []
+
+    const addresses = solanaTokens.map((t) => t.tokenAddress)
+
+    // 2. Batch fetch real token details, pairs, logos, and market caps
+    let pairMap = new Map()
+    try {
+      const pairsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addresses.join(',')}`)
+      if (pairsRes.ok) {
+        const pairsData = await pairsRes.json()
+        for (const p of pairsData.pairs || []) {
+          const addr = p.baseToken?.address
+          if (addr && (!pairMap.has(addr) || (p.marketCap || 0) > (pairMap.get(addr).marketCap || 0))) {
+            pairMap.set(addr, p)
+          }
+        }
       }
+    } catch (e) {
+      console.warn('Failed to fetch detailed pair info:', e)
+    }
+
+    return solanaTokens.map((item) => {
+      const pair = pairMap.get(item.tokenAddress) || {}
+      const base = pair.baseToken || {}
+      const info = pair.info || {}
+
+      // Robust image resolution: pair info imageUrl -> openGraph -> CDN fallback
+      let iconUrl = info.imageUrl || info.openGraph || ''
+      if (!iconUrl && item.icon) {
+        iconUrl = item.icon.startsWith('http')
+          ? item.icon
+          : `https://cdn.dexscreener.com/cms/images/${item.icon}?width=800&height=800&quality=95&format=auto`
+      }
+
+      const mcap = pair.marketCap || pair.fdv || null
+
       return {
         tokenAddress: item.tokenAddress,
-        url: item.url,
-        description: item.description || '',
-        icon: iconUrl || item.openGraph || '',
+        name: base.name || '',
+        symbol: base.symbol || '',
+        description: item.description || info.description || '',
+        icon: iconUrl,
+        marketCap: mcap,
+        marketCapFormatted: mcap ? compactUsd(mcap) : null,
+        url: pair.url || item.url || `https://dexscreener.com/solana/${item.tokenAddress}`,
         totalBoosts: item.totalAmount || item.amount || 0,
-        links: item.links || [],
+        links: info.socials || item.links || [],
       }
     })
   } catch (err) {
@@ -51,7 +88,6 @@ export async function fetchTokenDetailsByAddress(address) {
     const base = pair.baseToken || {}
     const info = pair.info || {}
 
-    // Extract social links
     let twitter = ''
     let telegram = ''
     let website = ''
@@ -69,11 +105,16 @@ export async function fetchTokenDetailsByAddress(address) {
       }
     }
 
+    let imageUrl = info.imageUrl || info.openGraph || ''
+    const mcap = pair.marketCap || pair.fdv || null
+
     return {
       name: base.name || '',
       symbol: base.symbol || '',
       address: base.address || clean,
-      imageUrl: info.imageUrl || info.openGraph || '',
+      imageUrl,
+      marketCap: mcap,
+      marketCapFormatted: mcap ? compactUsd(mcap) : null,
       description: info.description || '',
       twitter,
       telegram,
