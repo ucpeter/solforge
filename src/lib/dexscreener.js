@@ -1,31 +1,40 @@
 /**
  * DexScreener Public API integration for trending token cloning.
- * Free, keyless endpoints with ~60-300 req/min limits.
+ * Supports both "General Trending" (top boosted) and "New Trending" (latest boosts/profiles).
  */
 import { compactUsd } from './format.js'
 
-export async function fetchTrendingSolanaTokens(limit = 60) {
+/**
+ * Fetch trending tokens by category:
+ * - 'general': top active boosts on DexScreener (highest momentum/volume)
+ * - 'new': newly boosted / recently created profiles on DexScreener
+ */
+export async function fetchTrendingSolanaTokens(category = 'general', limit = 50) {
   try {
-    // 1. Fetch from multiple endpoints concurrently to get 50+ unique Solana tokens
-    const [topRes, latestRes, profilesRes] = await Promise.all([
-      fetch('https://api.dexscreener.com/token-boosts/top/v1').catch(() => null),
-      fetch('https://api.dexscreener.com/token-boosts/latest/v1').catch(() => null),
-      fetch('https://api.dexscreener.com/token-profiles/latest/v1').catch(() => null),
-    ])
+    let endpoints = []
+    if (category === 'new') {
+      endpoints = [
+        'https://api.dexscreener.com/token-boosts/latest/v1',
+        'https://api.dexscreener.com/token-profiles/latest/v1',
+      ]
+    } else {
+      endpoints = [
+        'https://api.dexscreener.com/token-boosts/top/v1',
+        'https://api.dexscreener.com/token-boosts/latest/v1',
+      ]
+    }
 
-    const [topData, latestData, profilesData] = await Promise.all([
-      topRes && topRes.ok ? topRes.json().catch(() => []) : [],
-      latestRes && latestRes.ok ? latestRes.json().catch(() => []) : [],
-      profilesRes && profilesRes.ok ? profilesRes.json().catch(() => []) : [],
-    ])
+    const responses = await Promise.all(
+      endpoints.map((ep) =>
+        fetch(ep, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [])
+      )
+    )
 
-    const allItems = [
-      ...(Array.isArray(topData) ? topData : []),
-      ...(Array.isArray(latestData) ? latestData : []),
-      ...(Array.isArray(profilesData) ? profilesData : []),
-    ]
+    const allItems = responses.flat()
 
-    // Filter to Solana chain and unique token addresses
+    // Filter to unique Solana token addresses
     const seen = new Set()
     const solanaTokens = []
     for (const item of allItems) {
@@ -38,7 +47,8 @@ export async function fetchTrendingSolanaTokens(limit = 60) {
     const slice = solanaTokens.slice(0, limit)
     if (slice.length === 0) return []
 
-    // 2. Batch fetch pair details, market caps, and created timestamps in chunks of 30
+    // Batch fetch pair details, market caps, symbols, names, and creation timestamps
+    // DexScreener /tokens/v1/solana/{addresses} accepts up to 30 comma-separated addresses
     const addresses = slice.map((t) => t.tokenAddress)
     const chunks = []
     for (let i = 0; i < addresses.length; i += 30) {
@@ -49,15 +59,19 @@ export async function fetchTrendingSolanaTokens(limit = 60) {
     await Promise.all(
       chunks.map(async (chunk) => {
         try {
-          const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`)
+          const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${chunk.join(',')}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          })
           if (res.ok) {
-            const data = await res.json()
-            for (const p of data.pairs || []) {
-              const addr = p.baseToken?.address
-              if (addr) {
-                const prev = pairMap.get(addr)
-                if (!prev || (p.marketCap || 0) > (prev.marketCap || 0)) {
-                  pairMap.set(addr, p)
+            const pairsData = await res.json()
+            if (Array.isArray(pairsData)) {
+              for (const p of pairsData) {
+                const addr = p.baseToken?.address
+                if (addr) {
+                  const prev = pairMap.get(addr)
+                  if (!prev || (p.marketCap || 0) > (prev.marketCap || 0)) {
+                    pairMap.set(addr, p)
+                  }
                 }
               }
             }
@@ -67,6 +81,29 @@ export async function fetchTrendingSolanaTokens(limit = 60) {
         }
       })
     )
+
+    // Secondary fallback for tokens that weren't returned in multi-token queries
+    const missing = slice.filter((t) => !pairMap.has(t.tokenAddress)).slice(0, 8)
+    if (missing.length > 0) {
+      await Promise.all(
+        missing.map(async (t) => {
+          try {
+            const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${t.tokenAddress}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+            })
+            if (res.ok) {
+              const data = await res.json()
+              const best = data.pairs?.[0]
+              if (best?.baseToken?.address) {
+                pairMap.set(best.baseToken.address, best)
+              }
+            }
+          } catch {
+            /* ignore individual fetch errors */
+          }
+        })
+      )
+    }
 
     return slice.map((item) => {
       const pair = pairMap.get(item.tokenAddress) || {}
@@ -122,7 +159,9 @@ export async function fetchTokenDetailsByAddress(address) {
   if (!clean) throw new Error('Token address is required')
 
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${clean}`)
+    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${clean}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     const pair = data.pairs?.[0]
