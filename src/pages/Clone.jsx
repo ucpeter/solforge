@@ -1,7 +1,11 @@
 /**
  * Clone — Clone Trending Tokens from DexScreener or paste any Solana token address.
- * Offers tabs for "General Trending" (top boosted) and "New Trending" (newly launched/boosted).
- * The category switch buttons remain sticky at the top while the trending list scrolls independently.
+ * Offers tabs for:
+ * 1. "🔥 General Trending" (top boosted)
+ * 2. "⚡ New Trending" (freshly launched within 24-48h)
+ * 3. "💊 Pump.fun Trending" (live trending Pump.fun coins)
+ *
+ * Sticky header keeps category switch buttons fixed while list scrolls independently.
  */
 import { useEffect, useState } from 'react'
 import { Banner, Button, Card, Field, Spinner, TextInput } from '../components/ui.jsx'
@@ -9,7 +13,7 @@ import { fetchTrendingSolanaTokens, fetchTokenDetailsByAddress } from '../lib/de
 import { shorten, clsx } from '../lib/format.js'
 
 export default function Clone({ onClone }) {
-  const [category, setCategory] = useState('general') // 'general' | 'new'
+  const [category, setCategory] = useState('general') // 'general' | 'new' | 'pump'
   const [trending, setTrending] = useState([])
   const [loadingTrending, setLoadingTrending] = useState(true)
   const [trendingError, setTrendingError] = useState(null)
@@ -71,7 +75,7 @@ export default function Clone({ onClone }) {
         <div>
           <h1 className="page__title">Copy Trending Tokens</h1>
           <p className="page__sub">
-            Clone any live trending or newly launched token from DexScreener with its logo, name, ticker, and metadata, then launch your own token on Solana with 0 platform fees.
+            Clone any live trending, newly launched, or Pump.fun token with its logo, name, ticker, and metadata, then launch your own token on Solana with 0 platform fees.
           </p>
         </div>
         <Button variant="ghost" onClick={() => loadTrending(category)} disabled={loadingTrending}>
@@ -154,13 +158,13 @@ export default function Clone({ onClone }) {
           </Card>
         </div>
 
-        {/* Right Column: Trending Feed with Sticky Header & Scrollable List */}
+        {/* Right Column: Trending Feed with Category Tabs */}
         <div className="page__col">
           <Card
-            title="DexScreener Trending"
-            subtitle="Browse live trending or newly launched Solana meme coins. Tap any coin to clone."
+            title="Solana Trending Tokens"
+            subtitle="Browse live trending, newly launched, or Pump.fun tokens. Tap Clone to copy directly into Creator."
           >
-            {/* Sticky Header Container: Stays fixed at the top while tokens scroll underneath */}
+            {/* Sticky Header Container */}
             <div
               style={{
                 position: 'sticky',
@@ -173,25 +177,35 @@ export default function Clone({ onClone }) {
                 marginBottom: '14px',
               }}
             >
-              <div className="seg" style={{ margin: 0 }}>
+              <div className="seg" style={{ margin: 0, display: 'flex', gap: '4px', overflowX: 'auto' }}>
                 <button
                   type="button"
                   className={clsx('seg__btn', category === 'general' && 'seg__btn--on')}
                   onClick={() => setCategory('general')}
+                  style={{ whiteSpace: 'nowrap' }}
                 >
-                  🔥 General Trending
+                  🔥 General
                 </button>
                 <button
                   type="button"
                   className={clsx('seg__btn', category === 'new' && 'seg__btn--on')}
                   onClick={() => setCategory('new')}
+                  style={{ whiteSpace: 'nowrap' }}
                 >
-                  ⚡ New Trending
+                  ⚡ New Pairs
+                </button>
+                <button
+                  type="button"
+                  className={clsx('seg__btn', category === 'pump' && 'seg__btn--on')}
+                  onClick={() => setCategory('pump')}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  💊 Pump.fun
                 </button>
               </div>
             </div>
 
-            {loadingTrending && <Spinner label={`Loading ${category === 'new' ? 'newly launched' : 'trending'} tokens from DexScreener…`} />}
+            {loadingTrending && <Spinner label={`Loading ${category === 'pump' ? 'Pump.fun trending' : category === 'new' ? 'newly launched' : 'trending'} tokens…`} />}
             {trendingError && (
               <div className="sectionerr">
                 <p>{trendingError}</p>
@@ -246,6 +260,11 @@ export default function Clone({ onClone }) {
                         <div style={{ fontWeight: 650, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                           <span>{t.name || shorten(t.tokenAddress, 6, 4)}</span>
                           {t.symbol && <span style={{ color: 'var(--accent)', fontSize: '13px' }}>(${t.symbol})</span>}
+                          {t.isPump && (
+                            <span style={{ fontSize: '10px', color: '#10b981', background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>
+                              pump
+                            </span>
+                          )}
                           {t.marketCapFormatted && (
                             <span style={{ fontSize: '11px', color: 'var(--good)', background: 'var(--bg-4)', padding: '1px 6px', borderRadius: '4px' }}>
                               {t.marketCapFormatted}
