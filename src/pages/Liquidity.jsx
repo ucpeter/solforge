@@ -322,39 +322,43 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
           )}
 
           {destination === 'pumpfun' && (
-            <Banner tone="warn" title="Pump.fun Launchpad (0 SOL)">
-              <div>
-                Tokens deploy into Pump.fun's virtual curve with <strong>0 initial SOL</strong> required.
-                When buyers contribute ~85 SOL, Pump.fun automatically migrates the pool to PumpSwap and burns the LP.
+            <Banner tone="warn" title="How Pump.fun Pools Work">
+              <div style={{ lineHeight: 1.5 }}>
+                Pump.fun does <strong>not</strong> allow importing external SPL tokens or adding liquidity to pre-minted tokens.
+                On Pump.fun, the token and its virtual bonding curve pool <strong>must be minted together at the exact same moment</strong> on Pump.fun.
               </div>
-              <div style={{ marginTop: '8px' }}>
+              <div style={{ marginTop: '10px', fontSize: '13px', color: 'var(--text-dim)' }}>
+                👉 To launch a coin on Pump.fun's 0-SOL curve, create the coin directly on their portal (requires connecting your wallet to sign in):
+              </div>
+              <div style={{ marginTop: '10px' }}>
                 <a
                   href="https://pump.fun/create"
                   target="_blank"
                   rel="noreferrer"
-                  className="btn btn--secondary btn--sm"
+                  className="btn btn--primary btn--sm"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
-                  Deploy on Pump.fun directly ↗
+                  Launch on Pump.fun Portal ↗
                 </a>
               </div>
             </Banner>
           )}
 
           {destination === 'raydium' && (
-            <Banner tone="info" title="Raydium CP-MM">
-              <div>
-                Standard Raydium liquidity pool. Requires 0.15 SOL Raydium pool creation fee + initial paired SOL.
+            <Banner tone="info" title="Raydium CP-MM Liquidity Pool">
+              <div style={{ lineHeight: 1.5 }}>
+                Deploy your token against SOL into a Standard Raydium CPMM Pool. Raydium charges a 0.15 SOL protocol creation fee.
+                You can seed liquidity with any existing token created here.
               </div>
-              <div style={{ marginTop: '8px' }}>
+              <div style={{ marginTop: '10px' }}>
                 <a
-                  href="https://raydium.io/liquidity/create/"
+                  href="https://raydium.io/liquidity/create-pool/"
                   target="_blank"
                   rel="noreferrer"
-                  className="btn btn--secondary btn--sm"
+                  className="btn btn--primary btn--sm"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
-                  Open Raydium Pool Creator ↗
+                  Open Raydium Pool Creator (CP-MM) ↗
                 </a>
               </div>
             </Banner>
