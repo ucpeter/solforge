@@ -40,7 +40,7 @@ import { addCreatedToken } from '../lib/registry.js'
 import { loadSettings, saveSettings } from '../lib/registry.js'
 import { clsx } from '../lib/format.js'
 
-export default function Create() {
+export default function Create({ initialClone = null, onClearClone = () => {} }) {
   const { connection, network } = useNetwork()
   const wallet = useWallet()
   const [settings, setSettings] = useState(() => loadSettings())
@@ -63,13 +63,33 @@ export default function Create() {
   // ---- metadata -----------------------------------------------------------
   const [metaMode, setMetaMode] = useState('build') // 'build' | 'uri'
   const [meta, setMeta] = useState({
-    description: '',
-    twitter: '',
-    telegram: '',
-    website: '',
+    description: initialClone?.description || '',
+    twitter: initialClone?.twitter || '',
+    telegram: initialClone?.telegram || '',
+    website: initialClone?.website || '',
   })
   const [imageFile, setImageFile] = useState(null)
-  const [imageUri, setImageUri] = useState('')
+  const [imageUri, setImageUri] = useState(initialClone?.imageUrl || '')
+
+  useEffect(() => {
+    if (initialClone) {
+      setForm((prev) => ({
+        ...prev,
+        name: initialClone.name || prev.name,
+        symbol: initialClone.symbol || prev.symbol,
+      }))
+      setMeta({
+        description: initialClone.description || '',
+        twitter: initialClone.twitter || '',
+        telegram: initialClone.telegram || '',
+        website: initialClone.website || '',
+      })
+      if (initialClone.imageUrl) {
+        setImageUri(initialClone.imageUrl)
+      }
+      onClearClone()
+    }
+  }, [initialClone])
   const [pastedUri, setPastedUri] = useState('')
   const [uriCheck, setUriCheck] = useState(null)
   const [uploading, setUploading] = useState(false)
@@ -319,7 +339,12 @@ export default function Create() {
                       {imageUri ? 'Re-upload' : 'Upload to Pinata'}
                     </Button>
                   </div>
-                  {imageUri && <span className="muted filerow__uri">{imageUri}</span>}
+                  {imageUri && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                      <img src={imageUri} alt="preview" style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
+                      <span className="muted filerow__uri" style={{ flex: 1, minWidth: 0 }}>{imageUri}</span>
+                    </div>
+                  )}
                 </Field>
                 <Field label="Description">
                   <textarea
