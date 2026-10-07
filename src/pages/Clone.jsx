@@ -1,6 +1,7 @@
 /**
  * Clone — Clone Trending Tokens from DexScreener or paste any Solana token address.
  * Offers tabs for "General Trending" (top boosted) and "New Trending" (newly launched/boosted).
+ * The category switch buttons remain sticky at the top while the trending list scrolls independently.
  */
 import { useEffect, useState } from 'react'
 import { Banner, Button, Card, Field, Spinner, TextInput } from '../components/ui.jsx'
@@ -153,28 +154,41 @@ export default function Clone({ onClone }) {
           </Card>
         </div>
 
-        {/* Right Column: Trending Feed with Category Tabs */}
+        {/* Right Column: Trending Feed with Sticky Header & Scrollable List */}
         <div className="page__col">
           <Card
             title="DexScreener Trending"
             subtitle="Browse live trending or newly launched Solana meme coins. Tap any coin to clone."
           >
-            {/* Category Switcher: General vs New Trending */}
-            <div className="seg" style={{ marginBottom: '14px' }}>
-              <button
-                type="button"
-                className={clsx('seg__btn', category === 'general' && 'seg__btn--on')}
-                onClick={() => setCategory('general')}
-              >
-                🔥 General Trending (Top Boosted)
-              </button>
-              <button
-                type="button"
-                className={clsx('seg__btn', category === 'new' && 'seg__btn--on')}
-                onClick={() => setCategory('new')}
-              >
-                ⚡ New Trending (Recently Launched)
-              </button>
+            {/* Sticky Header Container: Stays fixed at the top while tokens scroll underneath */}
+            <div
+              style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 10,
+                background: 'var(--bg-2, #141721)',
+                paddingBottom: '12px',
+                paddingTop: '2px',
+                borderBottom: '1px solid var(--line, rgba(255, 255, 255, 0.08))',
+                marginBottom: '14px',
+              }}
+            >
+              <div className="seg" style={{ margin: 0 }}>
+                <button
+                  type="button"
+                  className={clsx('seg__btn', category === 'general' && 'seg__btn--on')}
+                  onClick={() => setCategory('general')}
+                >
+                  🔥 General Trending
+                </button>
+                <button
+                  type="button"
+                  className={clsx('seg__btn', category === 'new' && 'seg__btn--on')}
+                  onClick={() => setCategory('new')}
+                >
+                  ⚡ New Trending
+                </button>
+              </div>
             </div>
 
             {loadingTrending && <Spinner label={`Loading ${category === 'new' ? 'newly launched' : 'trending'} tokens from DexScreener…`} />}
@@ -190,7 +204,18 @@ export default function Clone({ onClone }) {
             )}
 
             {!loadingTrending && trending.length > 0 && (
-              <div className="trending-grid" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div
+                className="trending-scroll-list"
+                style={{
+                  maxHeight: '620px',
+                  overflowY: 'auto',
+                  paddingRight: '4px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                  WebkitOverflowScrolling: 'touch',
+                }}
+              >
                 {trending.map((t) => (
                   <div
                     key={t.tokenAddress}
