@@ -1,23 +1,22 @@
 /**
  * DexScreener Public API integration for trending token cloning.
- * Supports both "General Trending" (top boosted) and "New Trending" (latest boosts/profiles).
+ * Supports:
+ * - 'general': top active boosts on DexScreener (highest overall momentum/volume)
+ * - 'new': strictly freshly created tokens (created within the last 24–48 hours, sorted newest first)
  */
 import { compactUsd } from './format.js'
 
-/**
- * Fetch trending tokens by category:
- * - 'general': top active boosts on DexScreener (highest momentum/volume)
- * - 'new': newly boosted / recently created profiles on DexScreener
- */
 export async function fetchTrendingSolanaTokens(category = 'general', limit = 50) {
   try {
     let endpoints = []
     if (category === 'new') {
+      // For new trending, combine latest token boosts and latest token profiles
       endpoints = [
         'https://api.dexscreener.com/token-boosts/latest/v1',
         'https://api.dexscreener.com/token-profiles/latest/v1',
       ]
     } else {
+      // General trending combines top boosts with latest boosts
       endpoints = [
         'https://api.dexscreener.com/token-boosts/top/v1',
         'https://api.dexscreener.com/token-boosts/latest/v1',
@@ -34,22 +33,25 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
 
     const allItems = responses.flat()
 
-    // Filter to unique Solana token addresses
+    // Deduplicate unique Solana token addresses
     const seen = new Set()
     const solanaTokens = []
+    const itemMetaMap = new Map()
+
     for (const item of allItems) {
       if (item.chainId === 'solana' && item.tokenAddress && !seen.has(item.tokenAddress)) {
         seen.add(item.tokenAddress)
         solanaTokens.push(item)
+        itemMetaMap.set(item.tokenAddress, item)
       }
     }
 
-    const slice = solanaTokens.slice(0, limit)
-    if (slice.length === 0) return []
+    // We scan up to 90 candidate tokens to ensure we get a deep batch of truly new coins
+    const candidateSlice = solanaTokens.slice(0, 90)
+    if (candidateSlice.length === 0) return []
 
-    // Batch fetch pair details, market caps, symbols, names, and creation timestamps
-    // DexScreener /tokens/v1/solana/{addresses} accepts up to 30 comma-separated addresses
-    const addresses = slice.map((t) => t.tokenAddress)
+    // Batch fetch pair details, creation timestamps, symbols, names, and market caps
+    const addresses = candidateSlice.map((t) => t.tokenAddress)
     const chunks = []
     for (let i = 0; i < addresses.length; i += 30) {
       chunks.push(addresses.slice(i, i + 30))
@@ -82,30 +84,10 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
       })
     )
 
-    // Secondary fallback for tokens that weren't returned in multi-token queries
-    const missing = slice.filter((t) => !pairMap.has(t.tokenAddress)).slice(0, 8)
-    if (missing.length > 0) {
-      await Promise.all(
-        missing.map(async (t) => {
-          try {
-            const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${t.tokenAddress}`, {
-              headers: { 'User-Agent': 'Mozilla/5.0' },
-            })
-            if (res.ok) {
-              const data = await res.json()
-              const best = data.pairs?.[0]
-              if (best?.baseToken?.address) {
-                pairMap.set(best.baseToken.address, best)
-              }
-            }
-          } catch {
-            /* ignore individual fetch errors */
-          }
-        })
-      )
-    }
+    const now = Date.now()
+    const mapped = []
 
-    return slice.map((item) => {
+    for (const item of candidateSlice) {
       const pair = pairMap.get(item.tokenAddress) || {}
       const base = pair.baseToken || {}
       const info = pair.info || {}
@@ -118,23 +100,50 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
       }
 
       const mcap = pair.marketCap || pair.fdv || null
-      const createdAt = pair.pairCreatedAt || null
+      const createdAt = pair.pairCreatedAt ? Number(pair.pairCreatedAt) : null
+      const ageMs = createdAt ? Math.max(0, now - createdAt) : null
 
-      return {
+      // Fallback name & symbol: if pair isn't indexed yet, derive from address or fallback
+      const symbol = base.symbol || ''
+      const name = base.name || symbol || ''
+
+      mapped.push({
         tokenAddress: item.tokenAddress,
-        name: base.name || '',
-        symbol: base.symbol || '',
+        name,
+        symbol,
         description: item.description || info.description || '',
         icon: iconUrl,
         marketCap: mcap,
         marketCapFormatted: mcap ? compactUsd(mcap) : null,
         createdAt,
+        ageMs,
         ageFormatted: formatAge(createdAt),
         url: pair.url || item.url || `https://dexscreener.com/solana/${item.tokenAddress}`,
         totalBoosts: item.totalAmount || item.amount || 0,
         links: info.socials || item.links || [],
+      })
+    }
+
+    if (category === 'new') {
+      // Filter strictly to tokens created within the last 48 hours (48 * 3600 * 1000 ms)
+      // And sort by newest creation date first (shortest age)
+      const MAX_AGE_MS = 48 * 60 * 60 * 1000
+      const freshlyCreated = mapped
+        .filter((t) => t.createdAt && t.ageMs !== null && t.ageMs <= MAX_AGE_MS)
+        .sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0))
+
+      if (freshlyCreated.length >= 10) {
+        return freshlyCreated.slice(0, limit)
       }
-    })
+      // If fewer than 10 are <48h, sort all available by newest creation time first
+      return mapped
+        .filter((t) => t.createdAt)
+        .sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0))
+        .slice(0, limit)
+    }
+
+    // General trending: keeps top boosted order
+    return mapped.slice(0, limit)
   } catch (err) {
     console.error('Failed to fetch trending tokens from DexScreener:', err)
     return []
