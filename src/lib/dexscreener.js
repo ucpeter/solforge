@@ -3,6 +3,7 @@
  * Supports:
  * - 'general': top active boosts on DexScreener (highest overall momentum/volume)
  * - 'new': strictly freshly created tokens (created within the last 24–48 hours, sorted newest first)
+ * - 'pump': live trending tokens launched directly on Pump.fun (ending in 'pump')
  */
 import { compactUsd } from './format.js'
 
@@ -10,9 +11,15 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
   try {
     let endpoints = []
     if (category === 'new') {
-      // For new trending, combine latest token boosts and latest token profiles
       endpoints = [
         'https://api.dexscreener.com/token-boosts/latest/v1',
+        'https://api.dexscreener.com/token-profiles/latest/v1',
+      ]
+    } else if (category === 'pump') {
+      // For Pump.fun, scan all latest boosts, top boosts, and new profiles
+      endpoints = [
+        'https://api.dexscreener.com/token-boosts/latest/v1',
+        'https://api.dexscreener.com/token-boosts/top/v1',
         'https://api.dexscreener.com/token-profiles/latest/v1',
       ]
     } else {
@@ -40,13 +47,19 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
 
     for (const item of allItems) {
       if (item.chainId === 'solana' && item.tokenAddress && !seen.has(item.tokenAddress)) {
+        if (category === 'pump') {
+          // Strictly Pump.fun mint addresses ending in 'pump'
+          if (!item.tokenAddress.toLowerCase().endsWith('pump')) {
+            continue
+          }
+        }
         seen.add(item.tokenAddress)
         solanaTokens.push(item)
         itemMetaMap.set(item.tokenAddress, item)
       }
     }
 
-    // We scan up to 90 candidate tokens to ensure we get a deep batch of truly new coins
+    // We scan candidate tokens
     const candidateSlice = solanaTokens.slice(0, 90)
     if (candidateSlice.length === 0) return []
 
@@ -103,7 +116,6 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
       const createdAt = pair.pairCreatedAt ? Number(pair.pairCreatedAt) : null
       const ageMs = createdAt ? Math.max(0, now - createdAt) : null
 
-      // Fallback name & symbol: if pair isn't indexed yet, derive from address or fallback
       const symbol = base.symbol || ''
       const name = base.name || symbol || ''
 
@@ -121,12 +133,11 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
         url: pair.url || item.url || `https://dexscreener.com/solana/${item.tokenAddress}`,
         totalBoosts: item.totalAmount || item.amount || 0,
         links: info.socials || item.links || [],
+        isPump: item.tokenAddress.toLowerCase().endsWith('pump'),
       })
     }
 
     if (category === 'new') {
-      // Filter strictly to tokens created within the last 48 hours (48 * 3600 * 1000 ms)
-      // And sort by newest creation date first (shortest age)
       const MAX_AGE_MS = 48 * 60 * 60 * 1000
       const freshlyCreated = mapped
         .filter((t) => t.createdAt && t.ageMs !== null && t.ageMs <= MAX_AGE_MS)
@@ -135,10 +146,19 @@ export async function fetchTrendingSolanaTokens(category = 'general', limit = 50
       if (freshlyCreated.length >= 10) {
         return freshlyCreated.slice(0, limit)
       }
-      // If fewer than 10 are <48h, sort all available by newest creation time first
       return mapped
         .filter((t) => t.createdAt)
         .sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0))
+        .slice(0, limit)
+    }
+
+    if (category === 'pump') {
+      // Sort Pump.fun tokens by newest launch / highest activity
+      return mapped
+        .sort((a, b) => {
+          if (a.ageMs && b.ageMs) return a.ageMs - b.ageMs
+          return (b.marketCap || 0) - (a.marketCap || 0)
+        })
         .slice(0, limit)
     }
 
