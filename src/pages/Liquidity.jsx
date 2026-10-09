@@ -26,6 +26,13 @@ import {
 } from '../components/ui.jsx'
 import TxReview from '../components/TxReview.jsx'
 import PoolHoldings from './PoolHoldings.jsx'
+import {
+  RAYDIUM_CPMM_PROGRAM_ID,
+  RAYDIUM_DEFAULT_CONFIG,
+  RAYDIUM_MAINNET_CONFIGS,
+  buildCreateRaydiumPoolTx,
+} from '../lib/raydium.js'
+
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
 import {
@@ -232,32 +239,56 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
     decimals !== null &&
     BigInt(tokenRaw || '0') > 0n &&
     BigInt(solRaw || '0') > 0n &&
-    configs?.length > 0 &&
+    (destination === 'raydium' || configs?.length > 0) &&
     !planning
 
   async function openReview() {
     setPlanning(true)
     setPlanError(null)
     try {
-      const chosen = configs[configPick]
-      const p = await planCreatePool({
-        connection,
-        sdk,
-        payer: wallet.publicKey,
-        config: chosen.address,
-        tokenMint: mint,
-        tokenAmount: new BN(tokenRaw),
-        quoteMint: WSOL,
-        quoteAmount: new BN(solRaw),
-        tokenDecimals: decimals,
-        quoteDecimals: 9,
-        tokenProgram: programIdForChoice('spl'),
-        quoteProgram: programIdForChoice('spl'),
-        lockLiquidity: lock,
-        slippageBps: Number(slippage) || 0,
-      })
-      setPlan(p)
-      setReviewOpen(true)
+      if (destination === 'raydium') {
+        const rayRes = await buildCreateRaydiumPoolTx({
+          connection,
+          creator: wallet.publicKey,
+          tokenMint: mint,
+          tokenProgram: programIdForChoice('spl'),
+          tokenAmountRaw: tokenRaw,
+          solAmountLamports: solRaw,
+          network: network.id,
+        })
+        setPlan({
+          tx: rayRes.tx,
+          pool: new PublicKey(rayRes.poolState),
+          positionNft: null,
+          isRaydium: true,
+          notes: [
+            'Initializes a new Raydium CP-MM liquidity pool.',
+            'Raydium protocol creation fee: 0.15 SOL.',
+            'LP tokens are minted directly into your wallet.',
+          ],
+        })
+        setReviewOpen(true)
+      } else {
+        const chosen = configs[configPick]
+        const p = await planCreatePool({
+          connection,
+          sdk,
+          payer: wallet.publicKey,
+          config: chosen.address,
+          tokenMint: mint,
+          tokenAmount: new BN(tokenRaw),
+          quoteMint: WSOL,
+          quoteAmount: new BN(solRaw),
+          tokenDecimals: decimals,
+          quoteDecimals: 9,
+          tokenProgram: programIdForChoice('spl'),
+          quoteProgram: programIdForChoice('spl'),
+          lockLiquidity: lock,
+          slippageBps: Number(slippage) || 0,
+        })
+        setPlan(p)
+        setReviewOpen(true)
+      }
     } catch (err) {
       setPlanError(err.message)
     } finally {
@@ -345,21 +376,9 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
           )}
 
           {destination === 'raydium' && (
-            <Banner tone="info" title="Raydium CP-MM Liquidity Pool">
+            <Banner tone="info" title="Raydium CP-MM Liquidity Pool (Native In-App)">
               <div style={{ lineHeight: 1.5 }}>
-                Deploy your token against SOL into a Standard Raydium CPMM Pool. Raydium charges a 0.15 SOL protocol creation fee.
-                You can seed liquidity with any existing token created here.
-              </div>
-              <div style={{ marginTop: '10px' }}>
-                <a
-                  href="https://raydium.io/liquidity/create-pool/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn btn--primary btn--sm"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                >
-                  Open Raydium Pool Creator (CP-MM) ↗
-                </a>
+                Deploy directly to <strong>Raydium CP-MM</strong> right here in SolForge. Raydium charges a standard <strong>0.15 SOL</strong> protocol initialization fee. Your LP tokens are minted directly into your connected wallet.
               </div>
             </Banner>
           )}
@@ -455,6 +474,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
                 </div>
               </Banner>
             )}
+            {destination === 'meteora' && (
             <Field label="Pool config" hint="Configs are chosen by the protocol — each one fixes how fees behave.">
               {configError && <Banner tone="danger">{configError}</Banner>}
               {!configs && !configError && <Spinner label="Loading static configs…" />}
@@ -488,6 +508,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
                 </div>
               )}
             </Field>
+            )}
             <Field label={`Slippage tolerance (basis points, ${Number(slippage) / 100}%)`}>
               <TextInput type="number" value={slippage} onChange={setSlippage} min={0} max={10000} />
             </Field>
@@ -524,11 +545,14 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
         <TxReview
           open={reviewOpen}
           onClose={() => setReviewOpen(false)}
-          title="Create liquidity pool"
-          summary={`Deposit ${tokenAmount} tokens + ${solAmount} SOL into a new DAMM v2 pool on ${network.label}.`}
+          title={plan.isRaydium ? "Create Raydium CP-MM Pool" : "Create Meteora DAMM Pool"}
+          summary={`Deposit ${tokenAmount} tokens + ${solAmount} SOL into a new ${plan.isRaydium ? 'Raydium CP-MM' : 'DAMM v2'} pool on ${network.label}.`}
           transactions={[plan.tx]}
-          partialSigners={[[plan.positionNft]]}
-          costRows={[{ label: 'SOL deposited into the pool', lamports: Number(solRaw), recoverable: true }]}
+          partialSigners={plan.positionNft ? [[plan.positionNft]] : []}
+          costRows={[
+            { label: 'SOL deposited into the pool', lamports: Number(solRaw), recoverable: true },
+            ...(plan.isRaydium ? [{ label: 'Raydium protocol fee', lamports: 150000000, recoverable: false }] : [])
+          ]}
           notes={plan.notes}
           onSent={onSent}
         />
