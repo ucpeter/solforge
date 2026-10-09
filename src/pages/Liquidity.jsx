@@ -31,6 +31,8 @@ import {
   RAYDIUM_DEFAULT_CONFIG,
   RAYDIUM_MAINNET_CONFIGS,
   buildCreateRaydiumPoolTx,
+  readRaydiumPoolDetails,
+  buildWithdrawRaydiumTx,
 } from '../lib/raydium.js'
 
 import { useNetwork } from '../lib/network.jsx'
@@ -574,6 +576,8 @@ function Positions({ sdk }) {
   const wallet = useWallet()
 
   const [positions, setPositions] = useState(null)
+  const [raydiumPositions, setRaydiumPositions] = useState([])
+  const [protocolFilter, setProtocolFilter] = useState('all') // 'all' | 'meteora' | 'raydium'
   const [error, setError] = useState(null)
   const [decimalsByMint, setDecimalsByMint] = useState({})
   const [action, setAction] = useState(null) // { kind, position }
@@ -581,36 +585,65 @@ function Positions({ sdk }) {
   const load = useCallback(async () => {
     if (!wallet.isConnected) {
       setPositions(null)
+      setRaydiumPositions([])
       return
     }
     setError(null)
     try {
-      const list = await withRetries(() => readUserPositions(connection, sdk, wallet.publicKey))
-      setPositions(list)
-      const mints = new Set()
-      for (const p of list) {
-        mints.add(p.poolState.tokenAMint.toBase58())
-        mints.add(p.poolState.tokenBMint.toBase58())
+      // 1. Read Meteora positions
+      let list = []
+      try {
+        list = await withRetries(() => readUserPositions(connection, sdk, wallet.publicKey))
+        setPositions(list)
+        const mints = new Set()
+        for (const p of list) {
+          mints.add(p.poolState.tokenAMint.toBase58())
+          mints.add(p.poolState.tokenBMint.toBase58())
+        }
+        const missing = [...mints].filter((m) => !(m in decimalsByMint))
+        if (missing.length) {
+          const out = { ...decimalsByMint }
+          await Promise.all(
+            missing.map(async (m) => {
+              try {
+                out[m] = await readDecimals(connection, new PublicKey(m))
+              } catch {
+                out[m] = 9
+              }
+            })
+          )
+          setDecimalsByMint(out)
+        }
+      } catch (e) {
+        console.warn('Meteora positions load error:', e)
+        setPositions([])
       }
-      const missing = [...mints].filter((m) => !(m in decimalsByMint))
-      if (missing.length) {
-        const out = { ...decimalsByMint }
-        await Promise.all(
-          missing.map(async (m) => {
-            try {
-              out[m] = await readDecimals(connection, new PublicKey(m))
-            } catch {
-              out[m] = 9
-            }
-          })
-        )
-        setDecimalsByMint(out)
+
+      // 2. Read Raydium positions
+      try {
+        const localPools = listCreatedPools(network.id)
+        const rayEntries = localPools.filter((p) => p.platform === 'raydium' || !p.positionNftMint)
+        const rList = []
+        for (const p of rayEntries) {
+          const details = await readRaydiumPoolDetails(connection, p.pool, wallet.publicKey)
+          if (details) {
+            rList.push({
+              pool: new PublicKey(p.pool),
+              isRaydium: true,
+              details,
+              tokenMint: p.tokenMint,
+            })
+          }
+        }
+        setRaydiumPositions(rList)
+      } catch (e) {
+        console.warn('Raydium positions load error:', e)
       }
     } catch (err) {
       if (isEndpointBlocked(err)) probeFallbacks()
       setError(describeError(err))
     }
-  }, [connection, sdk, wallet.isConnected, wallet.publicKey, decimalsByMint, probeFallbacks])
+  }, [connection, sdk, wallet.isConnected, wallet.publicKey, decimalsByMint, network.id, probeFallbacks])
 
   useEffect(() => {
     load()
@@ -633,25 +666,65 @@ function Positions({ sdk }) {
         </Button>
       </div>
     )
-  if (!positions) return <div className="review__busy"><Spinner label="Loading positions…" /></div>
-  if (!positions.length)
-    return (
-      <Empty title="No DAMM v2 positions yet">
-        <p>Once you create a pool (or provide liquidity on any tool that uses DAMM v2) it will show up here.</p>
-      </Empty>
-    )
+  if (!positions && raydiumPositions.length === 0) return <div className="review__busy"><Spinner label="Loading positions…" /></div>
+
+  const visibleMeteora = (protocolFilter === 'all' || protocolFilter === 'meteora') ? (positions || []) : []
+  const visibleRaydium = (protocolFilter === 'all' || protocolFilter === 'raydium') ? raydiumPositions : []
+  const totalCount = visibleMeteora.length + visibleRaydium.length
 
   return (
     <div className="poslist">
-      {positions.map((p, i) => (
-        <PositionCard
-          key={p.position.toBase58()}
-          p={p}
-          decimalsByMint={decimalsByMint}
-          network={network}
-          onAction={setAction}
-        />
-      ))}
+      <div className="seg" style={{ marginBottom: '16px', display: 'flex', gap: '6px' }}>
+        <button
+          type="button"
+          className={`seg__btn ${protocolFilter === 'all' ? 'seg__btn--on' : ''}`}
+          onClick={() => setProtocolFilter('all')}
+        >
+          All Positions ({(positions?.length || 0) + raydiumPositions.length})
+        </button>
+        <button
+          type="button"
+          className={`seg__btn ${protocolFilter === 'meteora' ? 'seg__btn--on' : ''}`}
+          onClick={() => setProtocolFilter('meteora')}
+        >
+          Meteora DAMM ({positions?.length || 0})
+        </button>
+        <button
+          type="button"
+          className={`seg__btn ${protocolFilter === 'raydium' ? 'seg__btn--on' : ''}`}
+          onClick={() => setProtocolFilter('raydium')}
+        >
+          Raydium CP-MM ({raydiumPositions.length})
+        </button>
+      </div>
+
+      {totalCount === 0 ? (
+        <Empty title={`No ${protocolFilter === 'all' ? '' : protocolFilter.toUpperCase() + ' '}positions found`}>
+          <p>Create a pool on Meteora or Raydium first to manage liquidity positions here.</p>
+        </Empty>
+      ) : (
+        <>
+          {visibleMeteora.map((p) => (
+            <PositionCard
+              key={p.position.toBase58()}
+              p={p}
+              decimalsByMint={decimalsByMint}
+              network={network}
+              onAction={setAction}
+            />
+          ))}
+
+          {visibleRaydium.map((p) => (
+            <RaydiumPositionCard
+              key={p.pool.toBase58()}
+              p={p}
+              network={network}
+              onAction={setAction}
+            />
+          ))}
+        </>
+      )}
+
       <Button variant="ghost" onClick={load}>
         Refresh
       </Button>
@@ -739,6 +812,57 @@ function PositionCard({ p, decimalsByMint, network, onAction }) {
   )
 }
 
+function RaydiumPositionCard({ p, network, onAction }) {
+  const d = p.details
+  const decoded = d.decoded
+  const is0Wsol = decoded.token0Mint.equals(WSOL)
+  const solAmt = (Number(is0Wsol ? d.vault0Amount : d.vault1Amount) / 1e9).toFixed(3)
+  const tokenAmt = is0Wsol ? d.vault1Ui.toLocaleString() : d.vault0Ui.toLocaleString()
+  const userLpUi = d.userLpUi
+
+  return (
+    <Card
+      title={`Raydium Pool ${p.pool.toBase58().slice(0, 8)}…`}
+      right={<Banner tone="good">Raydium CP-MM (Standard)</Banner>}
+    >
+      <div className="form__row form__row--3 posnums">
+        <div>
+          <span className="muted">SOL Vault</span>
+          <div style={{ fontWeight: 650 }}>{solAmt} SOL</div>
+        </div>
+        <div>
+          <span className="muted">Token Vault</span>
+          <div style={{ fontWeight: 650 }}>{tokenAmt} tokens</div>
+        </div>
+        <div>
+          <span className="muted">Your LP Ownership</span>
+          <div style={{ fontWeight: 650, color: 'var(--good)' }}>{userLpUi.toLocaleString()} LP ({userLpUi > 0 ? '100%' : '0%'})</div>
+        </div>
+      </div>
+
+      <KeyValue
+        dense
+        items={[
+          { label: 'Pool address', value: <Address value={p.pool} explorer={network.explorerAddress} />, mono: true },
+          { label: 'LP Mint address', value: <Address value={decoded.lpMint} explorer={network.explorerAddress} />, mono: true },
+          { label: 'Token 0 Vault', value: <Address value={decoded.token0Vault} explorer={network.explorerAddress} />, mono: true },
+          { label: 'Token 1 Vault', value: <Address value={decoded.token1Vault} explorer={network.explorerAddress} />, mono: true },
+        ]}
+      />
+
+      <div className="posactions">
+        <Button
+          variant="secondary"
+          disabled={userLpUi <= 0}
+          onClick={() => onAction({ kind: 'withdraw-raydium', p })}
+        >
+          Withdraw Liquidity
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 /* ------------------------------------------------------------- actions */
 
 function PositionAction({ action, sdk, decimalsByMint, onDone }) {
@@ -764,6 +888,7 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
 
   const title = {
     withdraw: 'Withdraw liquidity',
+    'withdraw-raydium': 'Withdraw Raydium Liquidity',
     lock: useVesting ? 'Time-based (vesting) lock' : 'Permanent lock',
     claim: 'Claim trading fees',
     add: 'Add liquidity',
@@ -785,6 +910,25 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
           percent: pctN,
           closePosition: closePos && pctN === 100,
         })
+      } else if (kind === 'withdraw-raydium') {
+        const pctN = Math.floor(Number(pct))
+        const userLp = p.details.userLpBalance
+        const burnAmount = (userLp * BigInt(pctN)) / 100n
+        const res = await buildWithdrawRaydiumTx({
+          connection,
+          owner: wallet.publicKey,
+          poolAddress: p.pool.toBase58(),
+          lpAmount: burnAmount,
+          network: network.id,
+        })
+        planTx = {
+          tx: res.tx,
+          notes: [
+            `Burns ${pctN}% of your Raydium LP position.`,
+            'Returns your deposited SOL directly to your native wallet balance.',
+            'Returns your unsold tokens directly to your wallet.',
+          ],
+        }
       } else if (kind === 'lock') {
         const available = lockableLiquidity(p.positionState, p.poolState)
         if (!useVesting) {
