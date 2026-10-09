@@ -39,6 +39,8 @@ const PROGRAM_LABELS = new Map([
   [ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(), 'Associated Token Account'],
   [PROGRAM.cpAmm.toBase58(), 'Meteora DAMM v2'],
   [new PublicKey(PROGRAM.metaplexMetadata).toBase58(), 'Metaplex Token Metadata'],
+  ['CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C', 'Raydium CP-MM'],
+  ['DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb', 'Raydium CP-MM (Devnet)'],
 ])
 
 /** Inverted TokenInstruction enum: 7 -> "MintTo". */
@@ -230,6 +232,19 @@ export function describeInstruction(ix) {
         kind: 'meteora',
         action: `Meteora DAMM v2: ${name || 'unknown method'}`,
         detail: name ? [] : [{ label: 'Data', value: `${data.length} bytes (could not decode)` }],
+      }
+    }
+
+    if (pid === 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C' || pid === 'DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb') {
+      const isInit = data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([175, 175, 109, 31, 13, 152, 155, 237]))
+      return {
+        ...base,
+        kind: 'raydium',
+        action: isInit ? 'Raydium CP-MM: Initialize Pool' : `Raydium CP-MM Instruction`,
+        detail: [
+          { label: 'Pool Action', value: isInit ? 'Create & Seed Constant Product Pool' : 'Raydium CP-MM Operation' },
+          { label: 'Accounts', value: `${ix.keys.length} accounts` },
+        ],
       }
     }
   } catch {
