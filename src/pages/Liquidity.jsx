@@ -297,20 +297,26 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   }
 
   async function onSent(results) {
-    addCreatedPool({
-      pool: plan.pool.toBase58(),
-      networkId: network.id,
-      positionNftMint: plan.positionNft.publicKey.toBase58(),
-      tokenMint: mint.toBase58(),
-      tokenAmount: tokenRaw,
-      solAmount: solRaw,
-      decimals,
-      config: configs[configPick].address,
-      locked: lock,
-      signatures: results.map((r) => r.signature),
-    })
-    setReviewOpen(false)
-    setPlan(null)
+    try {
+      addCreatedPool({
+        pool: plan.pool.toBase58(),
+        networkId: network.id,
+        platform: plan.isRaydium ? 'raydium' : 'meteora',
+        positionNftMint: plan.positionNft?.publicKey ? plan.positionNft.publicKey.toBase58() : (plan.lpMint || null),
+        tokenMint: mint.toBase58(),
+        tokenAmount: tokenRaw,
+        solAmount: solRaw,
+        decimals,
+        config: plan.isRaydium ? (plan.config || 'raydium-cpmm') : configs?.[configPick]?.address,
+        locked: lock,
+        signatures: results.map((r) => r.signature),
+      })
+    } catch (e) {
+      console.warn('addCreatedPool save error:', e)
+    } finally {
+      setReviewOpen(false)
+      setPlan(null)
+    }
   }
 
   const chosen = configs?.[configPick]
