@@ -237,12 +237,13 @@ export function describeInstruction(ix) {
 
     if (pid === 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C' || pid === 'DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb') {
       const isInit = data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([175, 175, 109, 31, 13, 152, 155, 237]))
+      const isWithdraw = data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([183, 18, 70, 156, 148, 109, 161, 34]))
       return {
         ...base,
         kind: 'raydium',
-        action: isInit ? 'Raydium CP-MM: Initialize Pool' : `Raydium CP-MM Instruction`,
+        action: isInit ? 'Raydium CP-MM: Initialize Pool' : isWithdraw ? 'Raydium CP-MM: Withdraw Liquidity' : `Raydium CP-MM Instruction`,
         detail: [
-          { label: 'Pool Action', value: isInit ? 'Create & Seed Constant Product Pool' : 'Raydium CP-MM Operation' },
+          { label: 'Pool Action', value: isInit ? 'Create & Seed Constant Product Pool' : isWithdraw ? 'Withdraw Pool Liquidity & Burn LP' : 'Raydium CP-MM Operation' },
           { label: 'Accounts', value: `${ix.keys.length} accounts` },
         ],
       }

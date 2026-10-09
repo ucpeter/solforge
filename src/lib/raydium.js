@@ -1,13 +1,18 @@
 /**
- * Raydium CP-MM (Constant Product Market Maker) on-chain pool creation client.
- * Supports both Mainnet and Devnet with 100% native on-chain transaction generation.
+ * Raydium CP-MM (Constant Product Market Maker) on-chain client.
+ * Supports:
+ * - Pool initialization
+ * - Reading pool state and LP token balances
+ * - Liquidity withdrawal / position closing
  */
 import { PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js'
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   NATIVE_MINT,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
+  createCloseAccountInstruction,
   createSyncNativeInstruction,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token'
@@ -39,7 +44,6 @@ export const RAYDIUM_DEFAULT_CONFIG = {
   },
 }
 
-// Additional Fee Configurations for Mainnet
 export const RAYDIUM_MAINNET_CONFIGS = [
   { id: new PublicKey('D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2'), label: '0.25% Fee (Standard Memecoins)' },
   { id: new PublicKey('BhH6HphjBKXu2PkUc2aw3xEMdUvK14NXxE5LbNWZNZAA'), label: '0.50% Fee' },
@@ -52,13 +56,12 @@ export const POOL_LP_MINT_SEED = 'pool_lp_mint'
 export const POOL_VAULT_SEED = 'pool_vault'
 export const OBSERVATION_SEED = 'observation'
 
-// Anchor instruction discriminator for "global:initialize"
-// sha256("global:initialize")[0..8] = [175, 175, 109, 31, 13, 152, 155, 237]
+// Anchor instruction discriminators
+// sha256("global:initialize")[0..8]
 export const INITIALIZE_DISCRIMINATOR = Buffer.from([175, 175, 109, 31, 13, 152, 155, 237])
+// sha256("global:withdraw")[0..8]
+export const WITHDRAW_DISCRIMINATOR = Buffer.from([183, 18, 70, 156, 148, 109, 161, 34])
 
-/**
- * Determine token0 and token1 ordering (token0 must have smaller bytes than token1)
- */
 export function sortMints(mintA, mintB) {
   const bufA = mintA.toBuffer()
   const bufB = mintB.toBuffer()
@@ -67,9 +70,6 @@ export function sortMints(mintA, mintB) {
   return cmp < 0 ? { token0: mintA, token1: mintB, inverted: false } : { token0: mintB, token1: mintA, inverted: true }
 }
 
-/**
- * Derive all Raydium CPMM PDAs
- */
 export function getCpmmPdaAddresses(programId, ammConfig, token0Mint, token1Mint) {
   const [authority] = PublicKey.findProgramAddressSync([Buffer.from(AUTH_SEED)], programId)
 
@@ -109,7 +109,7 @@ export function getCpmmPdaAddresses(programId, ammConfig, token0Mint, token1Mint
 }
 
 /**
- * Build the complete Raydium CP-MM Pool creation transaction
+ * Build Raydium CP-MM Pool creation transaction
  */
 export async function buildCreateRaydiumPoolTx({
   connection,
@@ -136,7 +136,6 @@ export async function buildCreateRaydiumPoolTx({
 
   const pdas = getCpmmPdaAddresses(programId, ammConfig, token0, token1)
 
-  // ATAs
   const creatorToken0Ata = getAssociatedTokenAddressSync(token0, creator, false, token0Program)
   const creatorToken1Ata = getAssociatedTokenAddressSync(token1, creator, false, token1Program)
   const creatorLpAta = getAssociatedTokenAddressSync(pdas.lpMint, creator, false, TOKEN_PROGRAM_ID)
@@ -144,7 +143,7 @@ export async function buildCreateRaydiumPoolTx({
 
   const tx = new Transaction()
 
-  // 1. Wrap SOL into WSOL ATA for creator
+  // Wrap SOL into WSOL ATA
   tx.add(
     createAssociatedTokenAccountIdempotentInstruction(
       creator,
@@ -163,14 +162,13 @@ export async function buildCreateRaydiumPoolTx({
   )
   tx.add(createSyncNativeInstruction(creatorWsolAta, TOKEN_PROGRAM_ID))
 
-  // 2. Encode instruction data: discriminator (8B) + init_amount_0 (8B) + init_amount_1 (8B) + open_time (8B)
+  // Instruction data
   const data = Buffer.alloc(8 + 8 + 8 + 8)
   INITIALIZE_DISCRIMINATOR.copy(data, 0)
   data.writeBigUInt64LE(amount0, 8)
   data.writeBigUInt64LE(amount1, 16)
-  data.writeBigUInt64LE(0n, 24) // 0 open_time = immediate open
+  data.writeBigUInt64LE(0n, 24)
 
-  // 3. Accounts for Raydium CP-MM initialize
   const keys = [
     { pubkey: creator, isSigner: true, isWritable: true },
     { pubkey: ammConfig, isSigner: false, isWritable: false },
@@ -194,13 +192,7 @@ export async function buildCreateRaydiumPoolTx({
     { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false },
   ]
 
-  tx.add(
-    new TransactionInstruction({
-      programId,
-      keys,
-      data,
-    })
-  )
+  tx.add(new TransactionInstruction({ programId, keys, data }))
 
   tx.feePayer = creator
   const { blockhash } = await connection.getLatestBlockhash('confirmed')
@@ -213,4 +205,164 @@ export async function buildCreateRaydiumPoolTx({
     token0: token0.toBase58(),
     token1: token1.toBase58(),
   }
+}
+
+/**
+ * Decode Raydium CP-MM Pool State Account on-chain
+ */
+export function decodeRaydiumPoolState(data) {
+  if (!data || data.length < 236) return null
+  const buf = Buffer.from(data)
+  return {
+    ammConfig: new PublicKey(buf.subarray(8, 40)),
+    poolCreator: new PublicKey(buf.subarray(40, 72)),
+    token0Vault: new PublicKey(buf.subarray(72, 104)),
+    token1Vault: new PublicKey(buf.subarray(104, 136)),
+    lpMint: new PublicKey(buf.subarray(136, 168)),
+    token0Mint: new PublicKey(buf.subarray(168, 200)),
+    token1Mint: new PublicKey(buf.subarray(200, 232)),
+    token0Program: new PublicKey(buf.subarray(232, 264)),
+    token1Program: new PublicKey(buf.subarray(264, 296)),
+    observationKey: new PublicKey(buf.subarray(296, 328)),
+    authBump: buf[328],
+    status: buf[329],
+    lpMintDecimals: buf[330],
+    mint0Decimals: buf[331],
+    mint1Decimals: buf[332],
+    lpSupply: buf.readBigUInt64LE(333),
+  }
+}
+
+/**
+ * Read Raydium pool details & vault balances
+ */
+export async function readRaydiumPoolDetails(connection, poolAddress, walletPublicKey = null) {
+  const poolKey = new PublicKey(poolAddress)
+  const acc = await connection.getAccountInfo(poolKey)
+  if (!acc) return null
+
+  const decoded = decodeRaydiumPoolState(acc.data)
+  if (!decoded) return null
+
+  // Fetch token vault balances
+  const [b0, b1] = await Promise.all([
+    connection.getTokenAccountBalance(decoded.token0Vault).catch(() => null),
+    connection.getTokenAccountBalance(decoded.token1Vault).catch(() => null),
+  ])
+
+  let userLpBalance = 0n
+  let userLpUi = 0
+  if (walletPublicKey) {
+    try {
+      const ata = getAssociatedTokenAddressSync(decoded.lpMint, walletPublicKey, false, TOKEN_PROGRAM_ID)
+      const res = await connection.getTokenAccountBalance(ata)
+      userLpBalance = BigInt(res.value.amount || '0')
+      userLpUi = res.value.uiAmount || 0
+    } catch {
+      // User has no ATA or 0 balance
+    }
+  }
+
+  return {
+    poolAddress,
+    decoded,
+    vault0Amount: b0 ? BigInt(b0.value.amount) : 0n,
+    vault1Amount: b1 ? BigInt(b1.value.amount) : 0n,
+    vault0Ui: b0 ? b0.value.uiAmount : 0,
+    vault1Ui: b1 ? b1.value.uiAmount : 0,
+    userLpBalance,
+    userLpUi,
+  }
+}
+
+/**
+ * Build Raydium CP-MM Liquidity Withdrawal Transaction
+ */
+export async function buildWithdrawRaydiumTx({
+  connection,
+  owner,
+  poolAddress,
+  lpAmount,
+  network = 'devnet',
+}) {
+  const isMainnet = network === 'mainnet'
+  const programId = isMainnet ? RAYDIUM_CPMM_PROGRAM_ID.mainnet : RAYDIUM_CPMM_PROGRAM_ID.devnet
+
+  const poolKey = new PublicKey(poolAddress)
+  const acc = await connection.getAccountInfo(poolKey)
+  if (!acc) throw new Error('Pool account not found')
+
+  const state = decodeRaydiumPoolState(acc.data)
+  if (!state) throw new Error('Invalid Raydium pool data')
+
+  const [authority] = PublicKey.findProgramAddressSync([Buffer.from(AUTH_SEED)], programId)
+
+  const ownerLpToken = getAssociatedTokenAddressSync(state.lpMint, owner, false, TOKEN_PROGRAM_ID)
+  const token0Account = getAssociatedTokenAddressSync(state.token0Mint, owner, false, state.token0Program)
+  const token1Account = getAssociatedTokenAddressSync(state.token1Mint, owner, false, state.token1Program)
+
+  const tx = new Transaction()
+
+  // Ensure recipient token accounts exist
+  tx.add(
+    createAssociatedTokenAccountIdempotentInstruction(
+      owner,
+      token0Account,
+      owner,
+      state.token0Mint,
+      state.token0Program
+    )
+  )
+  tx.add(
+    createAssociatedTokenAccountIdempotentInstruction(
+      owner,
+      token1Account,
+      owner,
+      state.token1Mint,
+      state.token1Program
+    )
+  )
+
+  // Instruction data: discriminator (8B) + lp_token_amount (8B) + min_0 (8B) + min_1 (8B)
+  const data = Buffer.alloc(8 + 8 + 8 + 8)
+  WITHDRAW_DISCRIMINATOR.copy(data, 0)
+  data.writeBigUInt64LE(BigInt(lpAmount), 8)
+  data.writeBigUInt64LE(0n, 16) // 0 min = 100% accepted
+  data.writeBigUInt64LE(0n, 24)
+
+  const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr')
+
+  const keys = [
+    { pubkey: owner, isSigner: true, isWritable: true },
+    { pubkey: authority, isSigner: false, isWritable: false },
+    { pubkey: poolKey, isSigner: false, isWritable: true },
+    { pubkey: ownerLpToken, isSigner: false, isWritable: true },
+    { pubkey: token0Account, isSigner: false, isWritable: true },
+    { pubkey: token1Account, isSigner: false, isWritable: true },
+    { pubkey: state.token0Vault, isSigner: false, isWritable: true },
+    { pubkey: state.token1Vault, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: state.token0Mint, isSigner: false, isWritable: false },
+    { pubkey: state.token1Mint, isSigner: false, isWritable: false },
+    { pubkey: state.lpMint, isSigner: false, isWritable: true },
+    { pubkey: MEMO_PROGRAM_ID, isSigner: false, isWritable: false },
+  ]
+
+  tx.add(new TransactionInstruction({ programId, keys, data }))
+
+  // If one of the tokens is WSOL, unwrap it into native SOL automatically
+  const is0Wsol = state.token0Mint.equals(NATIVE_MINT)
+  const is1Wsol = state.token1Mint.equals(NATIVE_MINT)
+  if (is0Wsol) {
+    tx.add(createCloseAccountInstruction(token0Account, owner, owner, [], TOKEN_PROGRAM_ID))
+  } else if (is1Wsol) {
+    tx.add(createCloseAccountInstruction(token1Account, owner, owner, [], TOKEN_PROGRAM_ID))
+  }
+
+  tx.feePayer = owner
+  const { blockhash } = await connection.getLatestBlockhash('confirmed')
+  tx.recentBlockhash = blockhash
+
+  return { tx }
 }
