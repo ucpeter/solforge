@@ -13,6 +13,7 @@ import { listCreatedTokens, listCreatedPools } from '../lib/registry.js'
 import {
   readRaydiumPoolDetails,
   buildWithdrawRaydiumTx,
+  fetchUserRaydiumPoolsOnChain,
 } from '../lib/raydium.js'
 import {
   withRetries,
@@ -73,20 +74,32 @@ export default function PoolHoldings({ sdk }) {
           console.warn('Meteora read error:', e)
         }
 
-        // 2. Read Raydium pools from registry and on-chain
+        // 2. Read Raydium pools from both registry AND direct on-chain scan
         const localPools = listCreatedPools(network.id)
-        const raydiumPoolEntries = localPools.filter((p) => p.platform === 'raydium' || !p.positionNftMint)
+        const poolAddresses = new Set(
+          localPools
+            .filter((p) => p.platform === 'raydium' || !p.positionNftMint)
+            .map((p) => p.pool)
+        )
+
+        const onChainPools = await fetchUserRaydiumPoolsOnChain(connection, wallet.publicKey, network.id)
+        for (const op of onChainPools) {
+          poolAddresses.add(op.pubkey)
+        }
 
         const rList = []
-        for (const p of raydiumPoolEntries) {
+        for (const addr of poolAddresses) {
           try {
-            const details = await readRaydiumPoolDetails(connection, p.pool, wallet.publicKey)
+            const details = await readRaydiumPoolDetails(connection, addr, wallet.publicKey)
             if (details) {
+              const state = details.decoded
+              const is0W = state.token0Mint.equals(WSOL)
+              const tMint = is0W ? state.token1Mint.toBase58() : state.token0Mint.toBase58()
               rList.push({
-                pool: new PublicKey(p.pool),
+                pool: new PublicKey(addr),
                 isRaydium: true,
                 details,
-                tokenMint: p.tokenMint,
+                tokenMint: tMint,
               })
             }
           } catch (e) {

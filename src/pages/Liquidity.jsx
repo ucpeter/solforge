@@ -33,6 +33,7 @@ import {
   buildCreateRaydiumPoolTx,
   readRaydiumPoolDetails,
   buildWithdrawRaydiumTx,
+  fetchUserRaydiumPoolsOnChain,
 } from '../lib/raydium.js'
 
 import { useNetwork } from '../lib/network.jsx'
@@ -619,20 +620,38 @@ function Positions({ sdk }) {
         setPositions([])
       }
 
-      // 2. Read Raydium positions
+      // 2. Read Raydium positions (both local registry AND direct on-chain scan)
       try {
         const localPools = listCreatedPools(network.id)
-        const rayEntries = localPools.filter((p) => p.platform === 'raydium' || !p.positionNftMint)
+        const poolAddresses = new Set(
+          localPools
+            .filter((p) => p.platform === 'raydium' || !p.positionNftMint)
+            .map((p) => p.pool)
+        )
+
+        // Scan directly on-chain for pools created by this wallet
+        const onChainPools = await fetchUserRaydiumPoolsOnChain(connection, wallet.publicKey, network.id)
+        for (const op of onChainPools) {
+          poolAddresses.add(op.pubkey)
+        }
+
         const rList = []
-        for (const p of rayEntries) {
-          const details = await readRaydiumPoolDetails(connection, p.pool, wallet.publicKey)
-          if (details) {
-            rList.push({
-              pool: new PublicKey(p.pool),
-              isRaydium: true,
-              details,
-              tokenMint: p.tokenMint,
-            })
+        for (const addr of poolAddresses) {
+          try {
+            const details = await readRaydiumPoolDetails(connection, addr, wallet.publicKey)
+            if (details) {
+              const state = details.decoded
+              const is0W = state.token0Mint.equals(WSOL)
+              const tMint = is0W ? state.token1Mint.toBase58() : state.token0Mint.toBase58()
+              rList.push({
+                pool: new PublicKey(addr),
+                isRaydium: true,
+                details,
+                tokenMint: tMint,
+              })
+            }
+          } catch (e) {
+            console.warn('Raydium pool load error:', e)
           }
         }
         setRaydiumPositions(rList)
