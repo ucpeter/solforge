@@ -2,6 +2,7 @@
  * Raydium CP-MM (Constant Product Market Maker) on-chain client.
  * Supports:
  * - Pool initialization
+ * - Direct on-chain scanning of user pools (even without localStorage)
  * - Reading pool state and LP token balances
  * - Liquidity withdrawal / position closing
  */
@@ -57,9 +58,7 @@ export const POOL_VAULT_SEED = 'pool_vault'
 export const OBSERVATION_SEED = 'observation'
 
 // Anchor instruction discriminators
-// sha256("global:initialize")[0..8]
 export const INITIALIZE_DISCRIMINATOR = Buffer.from([175, 175, 109, 31, 13, 152, 155, 237])
-// sha256("global:withdraw")[0..8]
 export const WITHDRAW_DISCRIMINATOR = Buffer.from([183, 18, 70, 156, 148, 109, 161, 34])
 
 export function sortMints(mintA, mintB) {
@@ -234,6 +233,33 @@ export function decodeRaydiumPoolState(data) {
 }
 
 /**
+ * Scan on-chain Raydium pools directly for a wallet
+ * Queries the Raydium CP-MM program using memcmp on poolCreator (offset 40)
+ */
+export async function fetchUserRaydiumPoolsOnChain(connection, walletPublicKey, network = 'devnet') {
+  const isMainnet = network === 'mainnet'
+  const programId = isMainnet ? RAYDIUM_CPMM_PROGRAM_ID.mainnet : RAYDIUM_CPMM_PROGRAM_ID.devnet
+
+  try {
+    const res = await connection.getProgramAccounts(programId, {
+      filters: [
+        { dataSize: 637 },
+        { memcmp: { offset: 40, bytes: walletPublicKey.toBase58() } },
+      ],
+      encoding: 'base64',
+    })
+
+    return res.map((r) => ({
+      pubkey: r.pubkey.toBase58(),
+      account: r.account,
+    }))
+  } catch (err) {
+    console.warn('Direct on-chain Raydium pool scan failed:', err)
+    return []
+  }
+}
+
+/**
  * Read Raydium pool details & vault balances
  */
 export async function readRaydiumPoolDetails(connection, poolAddress, walletPublicKey = null) {
@@ -327,7 +353,7 @@ export async function buildWithdrawRaydiumTx({
   const data = Buffer.alloc(8 + 8 + 8 + 8)
   WITHDRAW_DISCRIMINATOR.copy(data, 0)
   data.writeBigUInt64LE(BigInt(lpAmount), 8)
-  data.writeBigUInt64LE(0n, 16) // 0 min = 100% accepted
+  data.writeBigUInt64LE(0n, 16)
   data.writeBigUInt64LE(0n, 24)
 
   const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr')
