@@ -1,14 +1,18 @@
 /**
- * Liquidity → Pool holdings: the live contents of your pool.
- * Supports both Meteora DAMM v2 and native Raydium CP-MM pools.
- * Allows viewing live pool balances, position details, and withdrawing liquidity with % control!
+ * Liquidity → Pool holdings: the live contents of your active pools.
+ * Displays ALL pools simultaneously in individual cards (no dropdown required).
+ * Filters out inactive pools (0 SOL or 0 LP balance) so closed pools never clutter the screen.
+ * Each card features:
+ *   - Left: SOL in pool + live USD equivalent (CoinGecko)
+ *   - Right: Created Token in pool
+ *   - Direct "Withdraw Liquidity" button that pops up the % selector (25%, 50%, 75%, 100%)
+ * Works seamlessly for both Meteora DAMM v2 and Raydium CP-MM.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { PublicKey } from '@solana/web3.js'
-import BN from 'bn.js'
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
-import { readUserPositions, toUi, WSOL, planRemoveLiquidity, sqrtPriceToPrice } from '../lib/liquidity.js'
+import { readUserPositions, toUi, WSOL, planRemoveLiquidity } from '../lib/liquidity.js'
 import { listCreatedTokens, listCreatedPools } from '../lib/registry.js'
 import {
   readRaydiumPoolDetails,
@@ -23,25 +27,25 @@ import {
   decimalsOf,
 } from '../lib/rpcResilience.js'
 import { solUsdPrice, formatUsd } from '../lib/price.js'
-import { Button, Empty, Spinner, Sol, Select, Banner } from '../components/ui.jsx'
+import { Button, Empty, Spinner, Sol, Modal } from '../components/ui.jsx'
 import TxReview from '../components/TxReview.jsx'
 
 export default function PoolHoldings({ sdk }) {
   const { connection, network, probeFallbacks } = useNetwork()
   const wallet = useWallet()
 
-  // Filter tab between All, Meteora, and Raydium
   const [protocolFilter, setProtocolFilter] = useState('all') // 'all' | 'meteora' | 'raydium'
+  const [showClosedPools, setShowClosedPools] = useState(false)
 
   const [meteoraList, setMeteoraList] = useState([])
   const [raydiumList, setRaydiumList] = useState([])
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [pick, setPick] = useState(0)
   const [usd, setUsd] = useState(null)
   const [created, setCreated] = useState(() => listCreatedTokens(network.id))
 
-  // Withdrawal state
+  // Modal withdrawal state
+  const [selectedPoolForWithdraw, setSelectedPoolForWithdraw] = useState(null)
   const [withdrawPercent, setWithdrawPercent] = useState('100')
   const [withdrawPlan, setWithdrawPlan] = useState(null)
   const [withdrawing, setWithdrawing] = useState(false)
@@ -74,7 +78,7 @@ export default function PoolHoldings({ sdk }) {
           console.warn('Meteora read error:', e)
         }
 
-        // 2. Read Raydium pools from both registry AND direct on-chain scan
+        // 2. Read Raydium pools from both registry and direct on-chain scan
         const localPools = listCreatedPools(network.id)
         const poolAddresses = new Set(
           localPools
@@ -144,29 +148,48 @@ export default function PoolHoldings({ sdk }) {
     solUsdPrice({ force: true }).then(setUsd)
   }
 
-  // Filtered pool list based on protocol filter
-  const allPools = [
+  // Helper to determine if pool has active liquidity
+  const isPoolActive = (p) => {
+    if (p.type === 'raydium') {
+      const is0W = p.details.decoded.token0Mint.equals(WSOL)
+      const solRaw = Number(is0W ? p.details.vault0Amount : p.details.vault1Amount)
+      const userLp = p.details.userLpBalance
+      return solRaw > 1000000 && userLp > 0n // More than 0.001 SOL & user has LP
+    } else {
+      const liq = p.liquidity
+      return !liq.unlocked.isZero()
+    }
+  }
+
+  // Combined and filtered pool list
+  const combined = [
     ...meteoraList.map((p) => ({ ...p, type: 'meteora' })),
     ...raydiumList.map((p) => ({ ...p, type: 'raydium' })),
-  ].filter((p) => protocolFilter === 'all' || p.type === protocolFilter)
+  ]
 
-  const active = allPools.length ? allPools[Math.min(pick, allPools.length - 1)] : null
+  const activePools = combined.filter((p) => isPoolActive(p))
+  const closedPools = combined.filter((p) => !isPoolActive(p))
 
-  async function handlePrepareWithdraw() {
-    if (!active) return
+  const visiblePools = (showClosedPools ? combined : activePools).filter(
+    (p) => protocolFilter === 'all' || p.type === protocolFilter
+  )
+
+  async function handleExecuteWithdraw() {
+    if (!selectedPoolForWithdraw) return
+    const p = selectedPoolForWithdraw
     const pct = Math.max(1, Math.min(100, Number(withdrawPercent) || 100))
     setWithdrawing(true)
 
     try {
-      if (active.type === 'raydium') {
-        const userLp = active.details.userLpBalance
+      if (p.type === 'raydium') {
+        const userLp = p.details.userLpBalance
         if (userLp <= 0n) throw new Error('No LP tokens in your wallet to withdraw.')
         const burnAmount = (userLp * BigInt(pct)) / 100n
 
         const res = await buildWithdrawRaydiumTx({
           connection,
           owner: wallet.publicKey,
-          poolAddress: active.pool.toBase58(),
+          poolAddress: p.pool.toBase58(),
           lpAmount: burnAmount,
           network: network.id,
         })
@@ -175,18 +198,17 @@ export default function PoolHoldings({ sdk }) {
           tx: res.tx,
           notes: [
             `Burns ${pct}% of your Raydium LP position.`,
-            'Returns your pooled SOL directly to your wallet balance.',
+            'Returns your pooled SOL directly to your native wallet balance.',
             'Returns your unsold tokens directly to your wallet.',
           ],
         })
       } else {
-        // Meteora DAMM withdrawal
         const planTx = await planRemoveLiquidity({
           connection,
           sdk,
           owner: wallet.publicKey,
-          pool: active.pool,
-          positionNftMint: active.positionNftMint,
+          pool: p.pool,
+          positionNftMint: p.positionNftMint,
           percent: pct,
           closePosition: pct === 100,
         })
@@ -229,194 +251,100 @@ export default function PoolHoldings({ sdk }) {
         </div>
       </div>
 
-      {/* Protocol Navigation Filter Bar */}
-      <div className="seg" style={{ marginBottom: '16px', display: 'flex', gap: '6px' }}>
-        <button
-          type="button"
-          className={`seg__btn ${protocolFilter === 'all' ? 'seg__btn--on' : ''}`}
-          onClick={() => {
-            setProtocolFilter('all')
-            setPick(0)
-          }}
-        >
-          All Pools ({meteoraList.length + raydiumList.length})
-        </button>
-        <button
-          type="button"
-          className={`seg__btn ${protocolFilter === 'meteora' ? 'seg__btn--on' : ''}`}
-          onClick={() => {
-            setProtocolFilter('meteora')
-            setPick(0)
-          }}
-        >
-          Meteora DAMM ({meteoraList.length})
-        </button>
-        <button
-          type="button"
-          className={`seg__btn ${protocolFilter === 'raydium' ? 'seg__btn--on' : ''}`}
-          onClick={() => {
-            setProtocolFilter('raydium')
-            setPick(0)
-          }}
-        >
-          Raydium CP-MM ({raydiumList.length})
-        </button>
+      {/* Protocol Navigation Filter Bar + Inactive Toggle */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '16px' }}>
+        <div className="seg" style={{ margin: 0, display: 'flex', gap: '6px' }}>
+          <button
+            type="button"
+            className={`seg__btn ${protocolFilter === 'all' ? 'seg__btn--on' : ''}`}
+            onClick={() => setProtocolFilter('all')}
+          >
+            All Active ({activePools.length})
+          </button>
+          <button
+            type="button"
+            className={`seg__btn ${protocolFilter === 'meteora' ? 'seg__btn--on' : ''}`}
+            onClick={() => setProtocolFilter('meteora')}
+          >
+            Meteora DAMM ({activePools.filter((p) => p.type === 'meteora').length})
+          </button>
+          <button
+            type="button"
+            className={`seg__btn ${protocolFilter === 'raydium' ? 'seg__btn--on' : ''}`}
+            onClick={() => setProtocolFilter('raydium')}
+          >
+            Raydium CP-MM ({activePools.filter((p) => p.type === 'raydium').length})
+          </button>
+        </div>
+
+        {closedPools.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowClosedPools(!showClosedPools)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-dim)',
+              fontSize: '12px',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              padding: '4px 8px',
+            }}
+          >
+            {showClosedPools ? `Hide ${closedPools.length} Inactive/Closed Pools` : `Show ${closedPools.length} Inactive/Closed Pools`}
+          </button>
+        )}
       </div>
 
-      {!active ? (
-        loading ? (
-          <Spinner label="Reading your pools…" />
-        ) : (
-          <Empty title={`No ${protocolFilter === 'all' ? '' : protocolFilter.toUpperCase() + ' '}pools found`}>
-            <p>Create a pool on Meteora or Raydium first — its live SOL and token balances will show here.</p>
-          </Empty>
-        )
+      {loading && visiblePools.length === 0 ? (
+        <Spinner label="Reading your pools…" />
+      ) : visiblePools.length === 0 ? (
+        <Empty title={`No active ${protocolFilter === 'all' ? '' : protocolFilter.toUpperCase() + ' '}pools`}>
+          <p>
+            {closedPools.length > 0
+              ? `You have ${closedPools.length} closed/withdrawn pool(s). Tap "Show Inactive/Closed Pools" above to view past pools.`
+              : 'Create a pool on Meteora or Raydium first — its live SOL and token balances will show here.'}
+          </p>
+        </Empty>
       ) : (
-        <>
-          {allPools.length > 1 && (
-            <div className="poolhold__pick" style={{ marginBottom: '14px' }}>
-              <Select
-                value={String(Math.min(pick, allPools.length - 1))}
-                onChange={(v) => setPick(Number(v))}
-                options={allPools.map((p, i) => {
-                  const type = p.type === 'raydium' ? 'Raydium' : 'Meteora'
-                  const poolKeyStr = p.pool.toBase58().slice(0, 8)
-                  return {
-                    value: String(i),
-                    label: `[${type}] Pool ${poolKeyStr}… (${p.tokenMint ? symbolForMint(p.tokenMint) : 'Token'}/SOL)`,
-                  }
-                })}
-              />
-            </div>
-          )}
-
-          <PoolDisplay
-            active={active}
-            usd={usd}
-            symbolForMint={symbolForMint}
-            withdrawPercent={withdrawPercent}
-            setWithdrawPercent={setWithdrawPercent}
-            onWithdraw={handlePrepareWithdraw}
-            withdrawing={withdrawing}
-          />
-        </>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {visiblePools.map((p) => (
+            <PoolHoldingCard
+              key={p.pool.toBase58()}
+              p={p}
+              usd={usd}
+              symbolForMint={symbolForMint}
+              onOpenWithdraw={() => {
+                setSelectedPoolForWithdraw(p)
+                setWithdrawPercent('100')
+              }}
+            />
+          ))}
+        </div>
       )}
 
       {error && <div className="footnote poolhold__note" style={{ marginTop: '12px' }}>{error}</div>}
 
-      {withdrawPlan && (
-        <TxReview
+      {/* Pop-up Modal for Percentage Withdrawal */}
+      {selectedPoolForWithdraw && (
+        <Modal
           open
-          onClose={() => setWithdrawPlan(null)}
-          title={`Withdraw ${withdrawPercent}% Liquidity`}
-          summary={`Withdraw ${withdrawPercent}% of your ${active.type === 'raydium' ? 'Raydium CP-MM' : 'Meteora DAMM'} pool position.`}
-          transactions={[withdrawPlan.tx]}
-          partialSigners={[]}
-          costRows={[]}
-          notes={withdrawPlan.notes}
-          onSent={() => {
-            setWithdrawPlan(null)
-            refresh()
-          }}
-        />
-      )}
-    </div>
-  )
-}
+          onClose={() => setSelectedPoolForWithdraw(null)}
+          title={`Withdraw Liquidity (${selectedPoolForWithdraw.type === 'raydium' ? 'Raydium CP-MM' : 'Meteora DAMM'})`}
+        >
+          <div style={{ padding: '8px 0' }}>
+            <p style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-dim)' }}>
+              Choose what percentage of your liquidity you want to pull out of the pool back into your wallet:
+            </p>
 
-function PoolDisplay({ active, usd, symbolForMint, withdrawPercent, setWithdrawPercent, onWithdraw, withdrawing }) {
-  let solRaw = 0
-  let solAmt = 0
-  let solUsd = null
-  let tokenMintStr = ''
-  let tokenUi = '0'
-  let tokenSym = ''
-  let platformLabel = 'Meteora DAMM v2'
-  let userHoldingText = ''
-  let canWithdraw = false
-
-  if (active.type === 'raydium') {
-    platformLabel = 'Raydium CP-MM'
-    const state = active.details.decoded
-    const is0Wsol = state.token0Mint.equals(WSOL)
-    const solLamports = is0Wsol ? active.details.vault0Amount : active.details.vault1Amount
-    solRaw = Number(solLamports)
-    solAmt = solRaw / 1e9
-    solUsd = usd !== null ? solAmt * usd : null
-
-    tokenMintStr = is0Wsol ? state.token1Mint.toBase58() : state.token0Mint.toBase58()
-    tokenUi = is0Wsol ? active.details.vault1Ui : active.details.vault0Ui
-    tokenSym = symbolForMint(tokenMintStr)
-    const userLpUi = active.details.userLpUi
-    canWithdraw = userLpUi > 0
-    userHoldingText = `${userLpUi.toLocaleString()} LP Tokens (${userLpUi > 0 ? '100% of pool' : '0 LP tokens'})`
-  } else {
-    const dA = decimalsOf(active.poolState.tokenAMint)
-    const dB = decimalsOf(active.poolState.tokenBMint)
-    const solIsA = WSOL.equals(active.poolState.tokenAMint)
-
-    solRaw = Number((solIsA ? active.poolState.tokenAAmount : active.poolState.tokenBAmount).toString())
-    solAmt = solRaw / 1e9
-    solUsd = usd !== null ? solAmt * usd : null
-
-    const tokenMint = solIsA ? active.poolState.tokenBMint : active.poolState.tokenAMint
-    const tokenRaw = solIsA ? active.poolState.tokenBAmount : active.poolState.tokenAAmount
-    const tokenDec = solIsA ? dB : dA
-    tokenMintStr = tokenMint.toBase58()
-    tokenSym = symbolForMint(tokenMintStr)
-    tokenUi = toUi(tokenRaw, tokenDec)
-    const liq = active.liquidity
-    canWithdraw = !liq.unlocked.isZero()
-    userHoldingText = `${((Number(liq.unlocked.toString()) / (Number(liq.total.toString()) || 1)) * 100).toFixed(1)}% unlocked LP position`
-  }
-
-  return (
-    <div>
-      <div className="poolhold__id" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-        <span>Pool {active.pool.toBase58().slice(0, 8)}… · {tokenSym}/SOL</span>
-        <span style={{ fontSize: '12px', background: 'var(--bg-4)', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--line-2)' }}>
-          {platformLabel}
-        </span>
-      </div>
-
-      <div className="stats2">
-        <div className="statcard">
-          <span className="statcard__label">SOL in pool</span>
-          <span className="statcard__value">
-            <Sol lamports={solRaw} precision={6} />
-          </span>
-          {solUsd !== null && <span className="statcard__usd">≈ {formatUsd(solUsd)}</span>}
-          <span className="statcard__hint">{usd !== null ? 'price via CoinGecko' : 'SOL price unavailable'}</span>
-        </div>
-        <div className="statcard">
-          <span className="statcard__label">{tokenSym} in pool</span>
-          <span className="statcard__value poolhold__token">
-            {tokenUi}
-          </span>
-          <span className="statcard__hint">Current vault token balance</span>
-        </div>
-      </div>
-
-      {/* Position Details & Liquidity Withdrawal Box */}
-      <div style={{ marginTop: '20px', padding: '16px', background: 'var(--bg-3)', border: '1px solid var(--line)', borderRadius: '12px' }}>
-        <h3 style={{ margin: '0 0 4px', fontSize: '16px' }}>Your {platformLabel} Liquidity Position</h3>
-        <p className="muted" style={{ margin: '0 0 14px', fontSize: '13px' }}>
-          Current ownership: <strong>{userHoldingText}</strong>
-        </p>
-
-        {canWithdraw ? (
-          <div>
-            <label style={{ display: 'block', fontSize: '13px', marginBottom: '8px', fontWeight: 600 }}>
-              Select Percentage to Withdraw:
-            </label>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '14px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' }}>
               {['25', '50', '75', '100'].map((pct) => (
                 <button
                   key={pct}
                   type="button"
                   className={`seg__btn ${withdrawPercent === pct ? 'seg__btn--on' : ''}`}
                   onClick={() => setWithdrawPercent(pct)}
-                  style={{ minWidth: '60px', padding: '6px 12px' }}
+                  style={{ minWidth: '60px', padding: '8px 14px', fontWeight: 600 }}
                 >
                   {pct}%
                 </button>
@@ -429,35 +357,183 @@ function PoolDisplay({ active, usd, symbolForMint, withdrawPercent, setWithdrawP
                   value={withdrawPercent}
                   onChange={(e) => setWithdrawPercent(e.target.value)}
                   style={{
-                    width: '64px',
-                    padding: '6px 8px',
+                    width: '68px',
+                    padding: '8px',
                     background: 'var(--bg-2)',
                     border: '1px solid var(--line)',
                     borderRadius: '6px',
                     color: 'var(--text)',
-                    fontSize: '13px',
+                    fontSize: '14px',
                     textAlign: 'center',
                   }}
                 />
-                <span style={{ fontSize: '13px', color: 'var(--text-dim)' }}>%</span>
+                <span style={{ fontSize: '14px', color: 'var(--text-dim)' }}>%</span>
               </div>
             </div>
 
-            <Button
-              variant="danger"
-              onClick={onWithdraw}
-              disabled={withdrawing || !withdrawPercent || Number(withdrawPercent) <= 0}
-            >
-              {withdrawing ? 'Preparing…' : `Withdraw ${withdrawPercent}% Liquidity`}
-            </Button>
-            <p style={{ fontSize: '12px', color: 'var(--text-mute)', margin: '10px 0 0' }}>
-              Returns your deposited SOL and unsold {tokenSym} tokens directly back to your wallet.
-            </p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
+              <Button variant="ghost" onClick={() => setSelectedPoolForWithdraw(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={handleExecuteWithdraw}
+                disabled={withdrawing || !withdrawPercent || Number(withdrawPercent) <= 0}
+              >
+                {withdrawing ? 'Preparing…' : `Confirm Withdraw ${withdrawPercent}%`}
+              </Button>
+            </div>
           </div>
-        ) : (
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: 0 }}>
-            No unlocked liquidity available to withdraw for this pool.
-          </p>
+        </Modal>
+      )}
+
+      {/* TxReview Gate for Withdrawal */}
+      {withdrawPlan && (
+        <TxReview
+          open
+          onClose={() => setWithdrawPlan(null)}
+          title={`Withdraw ${withdrawPercent}% Liquidity`}
+          summary={`Withdraw ${withdrawPercent}% of your pool position back into your wallet.`}
+          transactions={[withdrawPlan.tx]}
+          partialSigners={[]}
+          costRows={[]}
+          notes={withdrawPlan.notes}
+          onSent={() => {
+            setWithdrawPlan(null)
+            setSelectedPoolForWithdraw(null)
+            refresh()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function PoolHoldingCard({ p, usd, symbolForMint, onOpenWithdraw }) {
+  let solRaw = 0
+  let solAmt = 0
+  let solUsd = null
+  let tokenMintStr = ''
+  let tokenUi = '0'
+  let tokenSym = ''
+  let platformLabel = 'Meteora DAMM v2'
+  let canWithdraw = false
+  let userHoldingText = ''
+
+  if (p.type === 'raydium') {
+    platformLabel = 'Raydium CP-MM'
+    const state = p.details.decoded
+    const is0W = state.token0Mint.equals(WSOL)
+    const solLamports = is0W ? p.details.vault0Amount : p.details.vault1Amount
+    solRaw = Number(solLamports)
+    solAmt = solRaw / 1e9
+    solUsd = usd !== null ? solAmt * usd : null
+
+    tokenMintStr = is0W ? state.token1Mint.toBase58() : state.token0Mint.toBase58()
+    tokenUi = is0W ? p.details.vault1Ui : p.details.vault0Ui
+    tokenSym = symbolForMint(tokenMintStr)
+    const userLpUi = p.details.userLpUi
+    canWithdraw = userLpUi > 0
+    userHoldingText = `${userLpUi.toLocaleString()} LP (${userLpUi > 0 ? '100%' : '0%'})`
+  } else {
+    const dA = decimalsOf(p.poolState.tokenAMint)
+    const dB = decimalsOf(p.poolState.tokenBMint)
+    const solIsA = WSOL.equals(p.poolState.tokenAMint)
+
+    solRaw = Number((solIsA ? p.poolState.tokenAAmount : p.poolState.tokenBAmount).toString())
+    solAmt = solRaw / 1e9
+    solUsd = usd !== null ? solAmt * usd : null
+
+    const tokenMint = solIsA ? p.poolState.tokenBMint : p.poolState.tokenAMint
+    const tokenRaw = solIsA ? p.poolState.tokenBAmount : p.poolState.tokenAAmount
+    const tokenDec = solIsA ? dB : dA
+    tokenMintStr = tokenMint.toBase58()
+    tokenSym = symbolForMint(tokenMintStr)
+    tokenUi = toUi(tokenRaw, tokenDec)
+    const liq = p.liquidity
+    canWithdraw = !liq.unlocked.isZero()
+    userHoldingText = `${((Number(liq.unlocked.toString()) / (Number(liq.total.toString()) || 1)) * 100).toFixed(1)}% unlocked LP`
+  }
+
+  const isInactive = solRaw <= 1000000 && !canWithdraw
+
+  return (
+    <div
+      style={{
+        background: 'var(--bg-3)',
+        border: '1px solid var(--line)',
+        borderRadius: '12px',
+        padding: '16px',
+        opacity: isInactive ? 0.65 : 1,
+      }}
+    >
+      {/* Card Header: Pool ID & Protocol Tag */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ fontSize: '15px', fontWeight: 650 }}>
+          Pool {p.pool.toBase58().slice(0, 8)}… · <span style={{ color: 'var(--accent)' }}>{tokenSym}/SOL</span>
+          {isInactive && (
+            <span style={{ marginLeft: '8px', fontSize: '11px', background: 'var(--bg-4)', color: 'var(--text-mute)', padding: '2px 6px', borderRadius: '4px' }}>
+              Closed / Withdrawn
+            </span>
+          )}
+        </div>
+        <span style={{ fontSize: '12px', background: 'var(--bg-4)', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--line-2)' }}>
+          {platformLabel}
+        </span>
+      </div>
+
+      {/* Main Stats: Left = SOL, Right = Created Token */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+          gap: '12px',
+          background: 'var(--bg-2)',
+          border: '1px solid var(--line)',
+          borderRadius: '10px',
+          padding: '14px',
+          marginBottom: '14px',
+        }}
+      >
+        {/* Left: SOL in Pool */}
+        <div>
+          <span style={{ fontSize: '12px', color: 'var(--text-mute)', display: 'block', marginBottom: '2px' }}>
+            SOL IN POOL
+          </span>
+          <div style={{ fontSize: '18px', fontWeight: 700 }}>
+            <Sol lamports={solRaw} precision={4} />
+          </div>
+          {solUsd !== null && (
+            <span style={{ fontSize: '12px', color: 'var(--good)' }}>
+              ≈ {formatUsd(solUsd)}
+            </span>
+          )}
+        </div>
+
+        {/* Right: Created Token in Pool */}
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-mute)', display: 'block', marginBottom: '2px' }}>
+            {tokenSym} IN POOL
+          </span>
+          <div style={{ fontSize: '18px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {tokenUi}
+          </div>
+          <span style={{ fontSize: '11px', color: 'var(--text-mute)' }}>
+            vault tokens
+          </span>
+        </div>
+      </div>
+
+      {/* Card Footer: Position Status & Withdraw Button */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
+          Ownership: <strong>{userHoldingText}</strong>
+        </div>
+
+        {canWithdraw && (
+          <Button variant="danger" size="sm" onClick={onOpenWithdraw}>
+            Withdraw Liquidity →
+          </Button>
         )}
       </div>
     </div>

@@ -687,8 +687,18 @@ function Positions({ sdk }) {
     )
   if (!positions && raydiumPositions.length === 0) return <div className="review__busy"><Spinner label="Loading positions…" /></div>
 
-  const visibleMeteora = (protocolFilter === 'all' || protocolFilter === 'meteora') ? (positions || []) : []
-  const visibleRaydium = (protocolFilter === 'all' || protocolFilter === 'raydium') ? raydiumPositions : []
+  // Filter active vs closed positions
+  const isRaydiumActive = (p) => {
+    const is0W = p.details.decoded.token0Mint.equals(WSOL)
+    const solRaw = Number(is0W ? p.details.vault0Amount : p.details.vault1Amount)
+    return solRaw > 1000000 && p.details.userLpUi > 0
+  }
+
+  const activeRaydium = raydiumPositions.filter(isRaydiumActive)
+  const activeMeteora = (positions || []).filter((p) => !p.liquidity.unlocked.isZero())
+
+  const visibleMeteora = (protocolFilter === 'all' || protocolFilter === 'meteora') ? activeMeteora : []
+  const visibleRaydium = (protocolFilter === 'all' || protocolFilter === 'raydium') ? activeRaydium : []
   const totalCount = visibleMeteora.length + visibleRaydium.length
 
   return (
@@ -699,21 +709,21 @@ function Positions({ sdk }) {
           className={`seg__btn ${protocolFilter === 'all' ? 'seg__btn--on' : ''}`}
           onClick={() => setProtocolFilter('all')}
         >
-          All Positions ({(positions?.length || 0) + raydiumPositions.length})
+          All Active ({activeMeteora.length + activeRaydium.length})
         </button>
         <button
           type="button"
           className={`seg__btn ${protocolFilter === 'meteora' ? 'seg__btn--on' : ''}`}
           onClick={() => setProtocolFilter('meteora')}
         >
-          Meteora DAMM ({positions?.length || 0})
+          Meteora DAMM ({activeMeteora.length})
         </button>
         <button
           type="button"
           className={`seg__btn ${protocolFilter === 'raydium' ? 'seg__btn--on' : ''}`}
           onClick={() => setProtocolFilter('raydium')}
         >
-          Raydium CP-MM ({raydiumPositions.length})
+          Raydium CP-MM ({activeRaydium.length})
         </button>
       </div>
 
