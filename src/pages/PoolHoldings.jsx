@@ -28,6 +28,7 @@ import {
 } from '../lib/rpcResilience.js'
 import { solUsdPrice, formatUsd } from '../lib/price.js'
 import { Button, Empty, Spinner, Sol, Modal } from '../components/ui.jsx'
+import { PlatformLinks } from '../components/SuccessModal.jsx'
 import TxReview from '../components/TxReview.jsx'
 
 export default function PoolHoldings({ sdk }) {
@@ -296,6 +297,13 @@ export default function PoolHoldings({ sdk }) {
         )}
       </div>
 
+      {visiblePools.length > 0 && network.id !== 'mainnet-beta' && (
+        <p style={{ margin: '0 0 14px', fontSize: '12px', color: 'var(--text-mute)', lineHeight: 1.55 }}>
+          Tracking platforms (Photon, DexScreener, Birdeye…) index mainnet only — a devnet token will not
+          appear there until you launch on mainnet.
+        </p>
+      )}
+
       {loading && visiblePools.length === 0 ? (
         <Spinner label="Reading your pools…" />
       ) : visiblePools.length === 0 ? (
@@ -313,6 +321,7 @@ export default function PoolHoldings({ sdk }) {
               key={p.pool.toBase58()}
               p={p}
               usd={usd}
+              network={network}
               symbolForMint={symbolForMint}
               onOpenWithdraw={() => {
                 setSelectedPoolForWithdraw(p)
@@ -409,7 +418,7 @@ export default function PoolHoldings({ sdk }) {
   )
 }
 
-function PoolHoldingCard({ p, usd, symbolForMint, onOpenWithdraw }) {
+function PoolHoldingCard({ p, usd, symbolForMint, network, onOpenWithdraw }) {
   let solRaw = 0
   let solAmt = 0
   let solUsd = null
@@ -522,6 +531,17 @@ function PoolHoldingCard({ p, usd, symbolForMint, onOpenWithdraw }) {
             vault tokens
           </span>
         </div>
+      </div>
+
+      {/* Platform shortcuts — the same button row the Meteora UI puts on a pool */}
+      <div style={{ marginBottom: '14px' }}>
+        <PlatformLinks
+          network={network}
+          mint={tokenMintStr}
+          pool={p.pool.toBase58()}
+          protocol={p.type === 'raydium' ? 'raydium' : 'meteora'}
+          compact
+        />
       </div>
 
       {/* Card Footer: Position Status & Withdraw Button */}

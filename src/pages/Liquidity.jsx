@@ -25,6 +25,7 @@ import {
   Toggle,
 } from '../components/ui.jsx'
 import TxReview from '../components/TxReview.jsx'
+import SuccessModal, { PlatformLinks } from '../components/SuccessModal.jsx'
 import PoolHoldings from './PoolHoldings.jsx'
 import {
   RAYDIUM_CPMM_PROGRAM_ID,
@@ -148,6 +149,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   const [configBusy, setConfigBusy] = useState(false)
 
   const [reviewOpen, setReviewOpen] = useState(false)
+  const [success, setSuccess] = useState(null)
   const [plan, setPlan] = useState(null)
   const [planning, setPlanning] = useState(false)
   const [planError, setPlanError] = useState(null)
@@ -300,13 +302,18 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
   }
 
   async function onSent(results) {
+    // Snapshot everything the success popup needs BEFORE the plan is cleared.
+    const poolAddress = plan.pool.toBase58()
+    const mintAddress = mint.toBase58()
+    const signature = results.map((r) => r.signature)[0] || null
+    const protocol = plan.isRaydium ? 'raydium' : 'meteora'
     try {
       addCreatedPool({
-        pool: plan.pool.toBase58(),
+        pool: poolAddress,
         networkId: network.id,
-        platform: plan.isRaydium ? 'raydium' : 'meteora',
+        platform: protocol,
         positionNftMint: plan.positionNft?.publicKey ? plan.positionNft.publicKey.toBase58() : (plan.lpMint || null),
-        tokenMint: mint.toBase58(),
+        tokenMint: mintAddress,
         tokenAmount: tokenRaw,
         solAmount: solRaw,
         decimals,
@@ -319,6 +326,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
     } finally {
       setReviewOpen(false)
       setPlan(null)
+      setSuccess({ poolAddress, mintAddress, signature, protocol })
     }
   }
 
@@ -566,6 +574,42 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
           onSent={onSent}
         />
       )}
+
+      <SuccessModal
+        open={Boolean(success)}
+        onClose={() => setSuccess(null)}
+        title="Liquidity pool created"
+        subtitle={
+          success
+            ? `Your ${success.protocol === 'raydium' ? 'Raydium CP-MM' : 'Meteora DAMM v2'} pool is open on ${network.label}. Track how the coin is doing with the buttons below — each one opens in a new tab.`
+            : ''
+        }
+        network={network}
+        linkData={
+          success
+            ? {
+                mint: success.mintAddress,
+                pool: success.poolAddress,
+                protocol: success.protocol,
+                signature: success.signature,
+                address: success.poolAddress,
+                addressLabel: 'View pool on Solana Explorer',
+              }
+            : {}
+        }
+        rows={
+          success
+            ? [
+                { label: 'Pool address', value: success.poolAddress, mono: true, copy: true },
+                { label: 'Token mint', value: success.mintAddress, mono: true, copy: true },
+                { label: 'Token deposited', value: `${tokenAmount} ${tokens.find((x) => x.mint === success.mintAddress)?.symbol || ''}`.trim() },
+                { label: 'SOL deposited', value: `${solAmount} SOL` },
+                { label: 'Protocol', value: success.protocol === 'raydium' ? 'Raydium CP-MM' : 'Meteora DAMM v2' },
+                { label: 'Network', value: network.label },
+              ]
+            : []
+        }
+      />
     </div>
   )
 }
@@ -823,6 +867,16 @@ function PositionCard({ p, decimalsByMint, network, onAction }) {
         ]}
       />
 
+      <div style={{ marginTop: '14px' }}>
+        <PlatformLinks
+          network={network}
+          mint={(WSOL.equals(p.poolState.tokenAMint) ? p.poolState.tokenBMint : p.poolState.tokenAMint).toBase58()}
+          pool={p.pool.toBase58()}
+          protocol="meteora"
+          compact
+        />
+      </div>
+
       <div className="posactions">
         <Button variant="secondary" disabled={liq.unlocked.isZero()} onClick={() => onAction({ kind: 'withdraw', p })}>
           Withdraw liquidity
@@ -878,6 +932,16 @@ function RaydiumPositionCard({ p, network, onAction }) {
           { label: 'Token 1 Vault', value: <Address value={decoded.token1Vault} explorer={network.explorerAddress} />, mono: true },
         ]}
       />
+
+      <div style={{ marginTop: '14px' }}>
+        <PlatformLinks
+          network={network}
+          mint={(is0Wsol ? decoded.token1Mint : decoded.token0Mint).toBase58()}
+          pool={p.pool.toBase58()}
+          protocol="raydium"
+          compact
+        />
+      </div>
 
       <div className="posactions">
         <Button

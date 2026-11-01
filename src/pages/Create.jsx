@@ -20,6 +20,7 @@ import {
   Toggle,
 } from '../components/ui.jsx'
 import TxReview from '../components/TxReview.jsx'
+import SuccessModal from '../components/SuccessModal.jsx'
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
 import { TOKEN_PROGRAM_CHOICES, tokenProgramById, PROGRAM } from '../lib/programs.js'
@@ -221,6 +222,7 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
   const [reviewOpen, setReviewOpen] = useState(false)
   const [plan, setPlan] = useState(null)
   const [txs, setTxs] = useState([])
+  const [success, setSuccess] = useState(null)
 
   const ready = formOk && Boolean(metadataUri?.trim()) && wallet.isConnected
 
@@ -243,8 +245,10 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
   }
 
   async function onSent(results) {
+    const mintAddress = plan.mint.toBase58()
+    const signature = results.map((r) => r.signature)[0] || null
     addCreatedToken({
-      mint: plan.mint.toBase58(),
+      mint: mintAddress,
       networkId: network.id,
       name: form.name.trim(),
       symbol: form.symbol.trim().toUpperCase(),
@@ -254,6 +258,10 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
       uri: metadataUri,
       signatures: results.map((r) => r.signature),
     })
+    // Swap TxReview's "done" state for the success popup: it carries the
+    // explorer link and every detail of what was just created in one place.
+    setReviewOpen(false)
+    setSuccess({ mintAddress, signature })
   }
 
   const choice = tokenProgramById(form.tokenProgram)
@@ -478,6 +486,42 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
           onSent={onSent}
         />
       )}
+
+      <SuccessModal
+        open={Boolean(success)}
+        onClose={() => setSuccess(null)}
+        title="Token created"
+        subtitle={
+          success
+            ? `${form.name.trim()} (${form.symbol.trim().toUpperCase()}) is live on ${network.label}. Save the mint address below — it is the only unique identifier for this token.`
+            : ''
+        }
+        network={network}
+        linkData={
+          success
+            ? {
+                mint: success.mintAddress,
+                signature: success.signature,
+                address: success.mintAddress,
+                addressLabel: 'View token on Solana Explorer',
+              }
+            : {}
+        }
+        hidePlatforms
+        rows={
+          success
+            ? [
+                { label: 'Name', value: form.name.trim() },
+                { label: 'Symbol', value: form.symbol.trim().toUpperCase() },
+                { label: 'Decimals', value: String(form.decimals) },
+                { label: 'Initial supply', value: String(form.supply) },
+                { label: 'Standard', value: choice.label },
+                { label: 'Network', value: network.label },
+                { label: 'Mint address', value: success.mintAddress, mono: true, copy: true },
+              ]
+            : []
+        }
+      />
     </div>
   )
 }
