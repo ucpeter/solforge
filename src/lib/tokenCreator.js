@@ -26,7 +26,10 @@ import {
   LENGTH_SIZE,
   TYPE_SIZE,
 } from '@solana/spl-token'
-import { createInitializeInstruction as createToken2022MetadataInit } from '@solana/spl-token-metadata'
+import {
+  createInitializeInstruction as createToken2022MetadataInit,
+  createUpdateAuthorityInstruction as createToken2022UpdateAuthorityInstruction,
+} from '@solana/spl-token-metadata'
 import { createCreateMetadataAccountV3Instruction, createUpdateMetadataAccountV2Instruction } from '@metaplex-foundation/mpl-token-metadata'
 import BN from 'bn.js'
 
@@ -234,16 +237,48 @@ export async function buildTokenCreation(connection, { payer, form, metadataUri 
   } else if (form.revokeFreezeLater) {
     instructions.push(createSetAuthorityInstruction(mint, payer, AuthorityType.FreezeAccount, null, [], tokenProgram))
   }
-  if (form.renounceMetadataUpdate && !is2022) {
-    // Wrapper key must be exactly `updateMetadataAccountArgsV2` — the IDL's
-    // struct name for this instruction's args (verified against the SDK).
-    instructions.push(
-      createUpdateMetadataAccountV2Instruction(
-        { metadata: metadataAccount, updateAuthority: payer },
-        { updateMetadataAccountArgsV2: { updateAuthority: new PublicKey(RENOUNCED_UPDATE_AUTHORITY), data: null, primarySaleHappened: null, isMutable: false } }
+  // ---- metadata locks ---------------------------------------------------
+  // The two standards do not have the same mechanics, and pretending they do
+  // is how a "locked" token ends up still editable.
+  //
+  //   Legacy SPL (Metaplex Token Metadata) has TWO independent fields — an
+  //   `isMutable` flag and an `updateAuthority` — so "immutable" and
+  //   "renounced" are genuinely different operations there.
+  //
+  //   Token-2022's TokenMetadata extension has NO mutability flag at all. Its
+  //   only lock is setting `updateAuthority` to None, so on Token-2022 BOTH
+  //   toggles necessarily do the same thing. Previously neither did anything.
+  if (is2022) {
+    if (form.metadataImmutable || form.renounceMetadataUpdate) {
+      // `newAuthority: null` encodes to the all-zero pubkey, which the program
+      // stores as OptionalNonZeroPubkey::None — permanently un-set, with no
+      // key anywhere that could ever sign for it again.
+      instructions.push(
+        createToken2022UpdateAuthorityInstruction({
+          programId: TOKEN_2022_PROGRAM_ID,
+          metadata: metadataAccount,
+          oldAuthority: payer,
+          newAuthority: null,
+        })
       )
-    )
-    notes.push('Metadata update authority renounced: name, symbol and image can never be changed again.')
+      notes.push(
+        'Token-2022 metadata update authority removed (set to None): name, symbol and image can never be changed again.'
+      )
+    }
+  } else {
+    // `isMutable` was already set at creation time above — that one is free,
+    // it is just a field in the create instruction.
+    if (form.renounceMetadataUpdate) {
+      // Wrapper key must be exactly `updateMetadataAccountArgsV2` — the IDL's
+      // struct name for this instruction's args (verified against the SDK).
+      instructions.push(
+        createUpdateMetadataAccountV2Instruction(
+          { metadata: metadataAccount, updateAuthority: payer },
+          { updateMetadataAccountArgsV2: { updateAuthority: new PublicKey(RENOUNCED_UPDATE_AUTHORITY), data: null, primarySaleHappened: null, isMutable: false } }
+        )
+      )
+      notes.push('Metadata update authority renounced: name, symbol and image can never be changed again.')
+    }
   }
 
   const ataRent = await connection.getMinimumBalanceForRentExemption(getAccountLen([]))
