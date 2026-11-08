@@ -313,13 +313,21 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
                   checked={form.metadataImmutable}
                   onChange={set('metadataImmutable')}
                   label="Make metadata immutable"
-                  description="Name, symbol and image can never be changed."
+                  description={
+                    form.tokenProgram === 'token2022'
+                      ? 'Name, symbol and image can never be changed. Token-2022 has no mutability flag, so this removes the metadata update authority instead.'
+                      : 'Name, symbol and image can never be changed. On SPL tokens this sets the Metaplex isMutable flag — free, it is a field in the create instruction.'
+                  }
                 />
                 <Toggle
                   checked={form.renounceMetadataUpdate}
                   onChange={set('renounceMetadataUpdate')}
                   label="Renounce metadata update authority"
-                  description="Only for SPL tokens. You lose the ability to edit metadata later."
+                  description={
+                    form.tokenProgram === 'token2022'
+                      ? 'Same lock as above on Token-2022: the update authority is set to an address nobody owns the key for.'
+                      : 'Hands the update authority to an address nobody owns the key for, and sets isMutable = false. Strongest signal on explorers and scanners — recommended alongside the toggle above.'
+                  }
                 />
               </div>
             </div>
