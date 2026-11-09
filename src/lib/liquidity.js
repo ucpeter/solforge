@@ -41,6 +41,7 @@ import {
   ConfigPermission,
   CpAmm,
   DEAD_LIQUIDITY,
+  cpAmmCoder,
   MAX_SQRT_PRICE,
   MIN_SQRT_PRICE,
   derivePoolAddress,
@@ -196,6 +197,46 @@ const BASE_FEE_MODE_LABEL = {
   [BaseFeeMode.FeeMarketCapSchedulerExponential]: 'Fee follows market cap (exponential)',
 }
 
+/**
+ * Configs SolForge has historically defaulted to. Pinned to the top of the
+ * list when present so a redeploy never silently picks a different config.
+ */
+const PINNED_CONFIG_ADDRESSES = new Set([
+  '8CNy9goNQNLM4wtgRw528tUQGMKD3vSuFRZY2gLGLLvF', // devnet default
+])
+
+/**
+ * Decode the fee-decay schedule out of the base-fee blob.
+ *
+ * The starting fee percentage alone does NOT identify a config: two configs
+ * can both "start at 1.00%" where one stays there forever and the other steps
+ * down three times. That difference is exactly what made the config dropdown
+ * look like it was full of duplicates.
+ *
+ * Returns null whenever the schedule cannot be decoded honestly (rate-limiter
+ * or market-cap modes, or a blob we do not understand) — we label that rather
+ * than guess at it.
+ */
+export function decodeFeeSchedule(state) {
+  try {
+    const mode = getBaseFeeModeFromBorshData(Buffer.from(state.poolFees.baseFee.data))
+    if (mode !== BaseFeeMode.FeeTimeSchedulerLinear && mode !== BaseFeeMode.FeeTimeSchedulerExponential) {
+      return null
+    }
+    const d = cpAmmCoder.types.decode('BorshFeeTimeScheduler', Buffer.from(state.poolFees.baseFee.data))
+    const periods = Number(d.number_of_period)
+    return {
+      periods,
+      periodFrequency: d.period_frequency.toString(),
+      reductionFactor: d.reduction_factor.toString(),
+      // A config with zero periods never decays — the starting fee IS the fee.
+      label: periods === 0 ? 'flat' : `falls in ${periods} steps`,
+    }
+  } catch {
+    return null
+  }
+}
+
 /** Turn a decoded ConfigState into something a human can compare. */
 export function describeConfig(config) {
   const state = config?.account ?? config
@@ -230,7 +271,7 @@ export function describeConfig(config) {
   const permission = new BN((state?.permission ?? 0).toString())
   const skipsMintValidation = isConfigPermissionAllow(permission, ConfigPermission.CreatePoolWithoutMintValidation)
 
-  return {
+  const out = {
     address: (config?.publicKey ?? config?.address)?.toString?.() ?? String(config?.publicKey ?? ''),
     collectFeeMode,
     collectFeeModeLabel: COLLECT_FEE_MODE_LABEL[collectFeeMode] ?? `Mode ${collectFeeMode}`,
@@ -240,6 +281,13 @@ export function describeConfig(config) {
     baseFeeModeLabel,
     startingFeeBps,
     dynamicFee,
+    feeSchedule: (() => {
+      try {
+        return decodeFeeSchedule(state)
+      } catch {
+        return null
+      }
+    })(),
     protocolFeePercent: Number(state?.poolFees?.protocolFeePercent ?? 0),
     referralFeePercent: Number(state?.poolFees?.referralFeePercent ?? 0),
     compoundingFeeBps: Number(state?.poolFees?.compoundingFeeBps ?? 0),
@@ -248,18 +296,82 @@ export function describeConfig(config) {
     skipsMintValidation,
     state,
   }
+
+  // Everything that actually makes two configs behave differently. Used to
+  // collapse the ~10 identical copies of each setup that exist on-chain.
+  // Measured on devnet: 336 of 672 configs start at >= 50% (mostly 99%).
+  // Nobody should seed a real pool with those, and they swamp the dropdown,
+  // so the UI hides them behind a toggle rather than deleting them.
+  out.isExtremeFee = out.startingFeeBps !== null && out.startingFeeBps >= 5000
+  out.compoundingFeePercent = out.compoundingFeeBps / 100
+
+  out.signature = [
+    out.collectFeeMode,
+    out.activationType,
+    out.startingFeeBps ?? 'x',
+    out.dynamicFee ? 1 : 0,
+    out.protocolFeePercent,
+    out.referralFeePercent,
+    out.compoundingFeeBps,
+    out.sqrtMinPrice.toString(),
+    out.sqrtMaxPrice.toString(),
+    out.feeSchedule ? `${out.feeSchedule.periods}|${out.feeSchedule.periodFrequency}|${out.feeSchedule.reductionFactor}` : 'x',
+  ].join('~')
+
+  return out
 }
 
 /**
- * Static (permissionless) configs only. Sorted so the plain two-sided
- * BothToken configs come first, then Compounding, then everything else.
+ * Static (permissionless) configs only.
+ *
+ * Two things happen here that did not used to, and both exist because the raw
+ * list is unusable without them (672 configs on devnet at the time of writing,
+ * collapsing to 204 distinct fee setups — each setup exists ~10 times under a
+ * different address):
+ *
+ *   1. DEDUPE — configs whose every behaviour-defining field match are merged
+ *      into one row. Measured 2026-11-08: on devnet this currently merges
+ *      NOTHING (672 configs, 672 distinct setups — the apparent clones differ
+ *      by compoundingFeeBps or by the decay schedule). It is kept because the
+ *      config set is permissionless and can grow duplicates at any time.
+ *   2. SORT — pinned defaults first, then BothToken, then Compounding, junk
+ *      test configs (>= 50% fee) pushed to the bottom, then by starting fee
+ *      and decay steps.
  */
 export async function listPoolConfigs(connection, sdk = makeSdk(connection)) {
   const raw = await sdk.getStaticConfigs()
   const described = raw.map(describeConfig)
+
+  // 1. Collapse identical setups.
+  const bySig = new Map()
+  for (const c of described) {
+    const existing = bySig.get(c.signature)
+    if (existing) {
+      existing.duplicates.push(c.address)
+      continue
+    }
+    c.duplicates = [c.address]
+    bySig.set(c.signature, c)
+  }
+  const uniq = [...bySig.values()]
+  for (const c of uniq) c.duplicateCount = c.duplicates.length
+
+  // 2. Sort.
   const rank = (c) => (c.collectFeeMode === CollectFeeMode.BothToken ? 0 : c.collectFeeMode === CollectFeeMode.Compounding ? 1 : 2)
-  described.sort((a, b) => rank(a) - rank(b) || (a.startingFeeBps ?? 999) - (b.startingFeeBps ?? 999))
-  return described
+  const isJunk = (c) => (c.startingFeeBps !== null && c.startingFeeBps >= 5000 ? 1 : 0)
+  const pinned = (c) => (PINNED_CONFIG_ADDRESSES.has(c.address) ? 0 : 1)
+
+  uniq.sort(
+    (a, b) =>
+      pinned(a) - pinned(b) ||
+      rank(a) - rank(b) ||
+      isJunk(a) - isJunk(b) ||
+      (a.startingFeeBps ?? 9999) - (b.startingFeeBps ?? 9999) ||
+      (a.feeSchedule?.periods ?? 0) - (b.feeSchedule?.periods ?? 0) ||
+      (a.dynamicFee ? 1 : 0) - (b.dynamicFee ? 1 : 0) ||
+      a.compoundingFeeBps - b.compoundingFeeBps
+  )
+  return uniq
 }
 
 /** Best-effort honest fee summary for an existing pool. */
