@@ -888,34 +888,56 @@ function Positions({ sdk }) {
   )
 }
 
+/**
+ * Resolve a mint address to a name a human recognises.
+ *
+ * Both the position card and the deposit form need this, so it lives here
+ * rather than being duplicated inside whichever component happened to be edited
+ * first. Symbols come from the tokens this user created (which is why they are
+ * per-network: a devnet mint and a mainnet mint are different tokens). Anything
+ * unknown falls back to a slice of the mint address, never to "Token A".
+ */
+function useTokenNaming(networkId) {
+  const created = useMemo(() => {
+    try {
+      return listCreatedTokens(networkId)
+    } catch {
+      return []
+    }
+  }, [networkId])
+
+  const symbolFor = useCallback((mintStr) => {
+    if (mintStr === WSOL.toBase58()) return 'SOL'
+    const hit = created.find((c) => c.mint === mintStr)
+    return hit?.symbol || null
+  }, [created])
+
+  const shortMint = useCallback((mintStr) => `${mintStr.slice(0, 4)}…${mintStr.slice(-4)}`, [])
+
+  const sideName = useCallback(
+    (mintStr) => symbolFor(mintStr) || shortMint(mintStr),
+    [symbolFor, shortMint],
+  )
+
+  const sideLabel = useCallback(
+    (mintStr) => {
+      const sym = symbolFor(mintStr)
+      return sym ? `${sym} (${shortMint(mintStr)})` : shortMint(mintStr)
+    },
+    [symbolFor, shortMint],
+  )
+
+  return { symbolFor, shortMint, sideName, sideLabel }
+}
+
 function PositionCard({ p, decimalsByMint, network, onAction }) {
   const dA = decimalsByMint[p.poolState.tokenAMint.toBase58()] ?? 9
   const dB = decimalsByMint[p.poolState.tokenBMint.toBase58()] ?? 9
 
-  // "Token A / Token B" tells a user nothing about which asset they are funding.
-  // Name the real asset on each side and show a slice of the mint.
+  // Name the real asset on each side; "Token A" alone tells the user nothing.
+  const { sideName, symbolFor } = useTokenNaming(network.id)
   const mintA = p.poolState.tokenAMint.toBase58()
   const mintB = p.poolState.tokenBMint.toBase58()
-  const created = useMemo(() => {
-    try {
-      return listCreatedTokens(network.id)
-    } catch {
-      return []
-    }
-  }, [network.id])
-  const symbolFor = (mintStr) => {
-    if (mintStr === WSOL.toBase58()) return 'SOL'
-    const hit = created.find((c) => c.mint === mintStr)
-    return hit?.symbol || null
-  }
-  const shortMint = (mintStr) => `${mintStr.slice(0, 4)}…${mintStr.slice(-4)}`
-  const sideLabel = (mintStr) => {
-    const sym = symbolFor(mintStr)
-    return sym ? `${sym} (${shortMint(mintStr)})` : shortMint(mintStr)
-  }
-  const sideName = (mintStr) => symbolFor(mintStr) || shortMint(mintStr)
-  const isNativeA = mintA === WSOL.toBase58()
-  const isNativeB = mintB === WSOL.toBase58()
   const price = sqrtPriceToPrice(p.poolState.sqrtPrice, dA, dB)
   const liq = p.liquidity
   const lockable = lockableLiquidity(p.positionState, p.poolState)
@@ -929,13 +951,17 @@ function PositionCard({ p, decimalsByMint, network, onAction }) {
     >
       <div className="form__row form__row--3 posnums">
         <div>
-          <span className="muted">Token A</span>
+          <span className="muted" title={mintA}>
+            Token A · <strong style={{ color: 'var(--text)' }}>{sideName(mintA)}</strong>
+          </span>
           <div>
-            <Amount value={p.poolState.tokenAAmount} decimals={dA} precision={2} />
+            <Amount value={p.poolState.tokenAAmount} decimals={dA} precision={2} symbol={symbolFor(mintA) || undefined} />
           </div>
         </div>
         <div>
-          <span className="muted">Token B</span>
+          <span className="muted" title={mintB}>
+            Token B · <strong style={{ color: 'var(--text)' }}>{sideName(mintB)}</strong>
+          </span>
           <div>
             {p.poolState.tokenBMint.equals(WSOL) ? (
               <Amount value={p.poolState.tokenBAmount} decimals={dB} precision={2} symbol="SOL" />
@@ -945,7 +971,9 @@ function PositionCard({ p, decimalsByMint, network, onAction }) {
           </div>
         </div>
         <div>
-          <span className="muted">Price (1 A = … B)</span>
+          <span className="muted">
+            Price (1 {sideName(mintA)} = … {sideName(mintB)})
+          </span>
           <div>{formatPrice(price)}</div>
         </div>
       </div>
@@ -1062,6 +1090,11 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
   const kind = action.kind
   const dA = decimalsByMint[p.poolState.tokenAMint.toBase58()] ?? 9
   const dB = decimalsByMint[p.poolState.tokenBMint.toBase58()] ?? 9
+  const { sideName, sideLabel } = useTokenNaming(network.id)
+  const mintA = p.poolState.tokenAMint.toBase58()
+  const mintB = p.poolState.tokenBMint.toBase58()
+  const isNativeA = mintA === WSOL.toBase58()
+  const isNativeB = mintB === WSOL.toBase58()
   const [busy, setBusy] = useState(false)
   const [plan, setPlan] = useState(null)
   const [error, setError] = useState(null)
