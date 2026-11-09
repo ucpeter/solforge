@@ -53,6 +53,13 @@ export default function TxReview({
   const [signatures, setSignatures] = useState([])
   const [error, setError] = useState(null)
   const [ackMainnet, setAckMainnet] = useState(false)
+  /**
+   * Plain-language explanation for the single most confusing failure: an
+   * unfunded wallet simulates as "AccountNotFound", because on Solana an
+   * account with zero lamports does not exist at all. Technically true,
+   * completely opaque. We detect it and say what it actually means.
+   */
+  const [fundingHint, setFundingHint] = useState(null)
 
   const needsMainnetAck = network.realMoney
 
@@ -64,6 +71,7 @@ export default function TxReview({
     setError(null)
     setSignatures([])
     setAckMainnet(false)
+    setFundingHint(null)
 
     ;(async () => {
       try {
@@ -103,6 +111,18 @@ export default function TxReview({
         setPrepared(finalised)
         setSimulations(sims)
         setPhase('ready')
+
+        // Explain an unfunded wallet in words a human can act on.
+        const broke = sims.find(
+          (s) => !s.ok && /AccountNotFound|InsufficientFunds|insufficient lamports/i.test(s.error || '')
+        )
+        if (broke) {
+          setFundingHint(
+            `Your wallet has no SOL on ${network.label}. On Solana an account with a zero balance does not exist at all, which is why this fails as "AccountNotFound" rather than "insufficient funds". Send some SOL to this wallet and try again — you do not need much, but the balance must cover the rent and fees shown above.`
+          )
+        } else {
+          setFundingHint(null)
+        }
       } catch (err) {
         if (cancelled) return
         setBlocker(err?.message || String(err))
@@ -214,6 +234,12 @@ export default function TxReview({
               {w.body}
             </Banner>
           ))}
+
+          {fundingHint && (
+            <Banner tone="warn" title="Your wallet is not funded on this network">
+              {fundingHint}
+            </Banner>
+          )}
 
           {simFailed && (
             <Banner tone="danger" title="Simulation failed — this transaction would revert">
