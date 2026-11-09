@@ -150,6 +150,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
 
   const [reviewOpen, setReviewOpen] = useState(false)
   const [success, setSuccess] = useState(null)
+  const [showExtremeConfigs, setShowExtremeConfigs] = useState(false)
   const [plan, setPlan] = useState(null)
   const [planning, setPlanning] = useState(false)
   const [planError, setPlanError] = useState(null)
@@ -274,7 +275,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
         })
         setReviewOpen(true)
       } else {
-        const chosen = configs[configPick]
+        const chosen = visibleConfigs[configPick]
         const p = await planCreatePool({
           connection,
           sdk,
@@ -317,7 +318,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
         tokenAmount: tokenRaw,
         solAmount: solRaw,
         decimals,
-        config: plan.isRaydium ? (plan.config || 'raydium-cpmm') : configs?.[configPick]?.address,
+        config: plan.isRaydium ? (plan.config || 'raydium-cpmm') : visibleConfigs?.[configPick]?.address,
         locked: lock,
         signatures: results.map((r) => r.signature),
       })
@@ -330,7 +331,16 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
     }
   }
 
-  const chosen = configs?.[configPick]
+  // Half the configs on devnet start at >= 50% (mostly 99%) — test junk.
+  // Hidden by default; the toggle brings them back for anyone who wants them.
+  const visibleConfigs = useMemo(() => {
+    if (!configs) return null
+    return showExtremeConfigs ? configs : configs.filter((c) => !c.isExtremeFee)
+  }, [configs, showExtremeConfigs])
+
+  const extremeCount = configs ? configs.filter((c) => c.isExtremeFee).length : 0
+
+  const chosen = visibleConfigs?.[configPick]
 
   return (
     <div className="page__grid page__grid--2col">
@@ -499,11 +509,34 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
                 <Select
                   value={String(configPick)}
                   onChange={(v) => setConfigPick(Number(v))}
-                  options={configs.map((c, i) => ({
+                  options={(visibleConfigs || []).map((c, i) => ({
                     value: String(i),
-                    label: `${i + 1}. ${c.collectFeeModeLabel} · starts ${c.startingFeeBps !== null ? (c.startingFeeBps / 100).toFixed(2) + '%' : '?'} · ${c.dynamicFee ? 'dynamic fee on' : 'no dynamic fee'}`,
+                    label: `${i + 1}. ${c.startingFeeBps !== null ? (c.startingFeeBps / 100).toFixed(2) + '%' : '?%'} · ${c.feeSchedule ? c.feeSchedule.label : 'schedule unknown'} · ${c.dynamicFee ? 'dynamic on' : 'no dynamic'}${c.collectFeeMode === 2 ? ` · compounding fee ${c.compoundingFeePercent.toFixed(2)}%` : ''} · ${c.address.slice(0, 4)}…`,
                   }))}
                 />
+              )}
+              {configs && extremeCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExtremeConfigs((v) => !v)
+                    setConfigPick(0)
+                  }}
+                  style={{
+                    marginTop: '8px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-dim)',
+                    fontSize: '12px',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    padding: '4px 0',
+                  }}
+                >
+                  {showExtremeConfigs
+                    ? `Hide ${extremeCount} extreme-fee test configs (50%+ fees)`
+                    : `Show ${extremeCount} extreme-fee test configs (50%+ fees)`}
+                </button>
               )}
               {chosen && (
                 <div className="cfgbox">
@@ -512,7 +545,30 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
                     items={[
                       { label: 'Fees', value: chosen.collectFeeModeLabel },
                       { label: 'Fee schedule', value: chosen.baseFeeModeLabel },
+                      {
+                        label: 'Fee decay',
+                        value: chosen.feeSchedule
+                          ? chosen.feeSchedule.periods === 0
+                            ? `Flat — stays at ${(chosen.startingFeeBps / 100).toFixed(2)}% forever`
+                            : `Steps down over ${chosen.feeSchedule.periods} period(s), then stays there`
+                          : 'Not decodable for this fee mode',
+                      },
                       { label: 'Dynamic fee', value: chosen.dynamicFee ? 'enabled' : 'disabled' },
+                      ...(chosen.collectFeeMode === 2
+                        ? [
+                            {
+                              label: 'Compounding fee',
+                              value: `${chosen.compoundingFeePercent.toFixed(2)}% (raw on-chain value: ${chosen.compoundingFeeBps} bps)`,
+                            },
+                          ]
+                        : []),
+                      {
+                        label: 'Identical on-chain copies',
+                        value:
+                          chosen.duplicateCount > 1
+                            ? `${chosen.duplicateCount} configs share this exact fee setup — any of them behaves the same`
+                            : 'Only one config has this setup',
+                      },
                       { label: 'Protocol share', value: `${chosen.protocolFeePercent}% of the trading fee` },
                       { label: 'Referral share', value: `${chosen.referralFeePercent}% of the trading fee` },
                       { label: 'Activation', value: chosen.activationTypeLabel },
