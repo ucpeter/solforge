@@ -558,7 +558,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
                         ? [
                             {
                               label: 'Compounding fee',
-                              value: `${chosen.compoundingFeePercent.toFixed(2)}% (raw on-chain value: ${chosen.compoundingFeeBps} bps)`,
+                              value: `${chosen.compoundingFeePercent.toFixed(2)}% of your LP fee is auto-reinvested into the position; the rest stays claimable (raw: ${chosen.compoundingFeeBps} bps)`,
                             },
                           ]
                         : []),
@@ -569,9 +569,24 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
                             ? `${chosen.duplicateCount} configs share this exact fee setup — any of them behaves the same`
                             : 'Only one config has this setup',
                       },
-                      { label: 'Protocol share', value: `${chosen.protocolFeePercent}% of the trading fee` },
-                      { label: 'Referral share', value: `${chosen.referralFeePercent}% of the trading fee` },
+                      { label: 'Protocol share', value: `${chosen.protocolFeePercent}% of the trading fee goes to Meteora` },
+                      {
+                        label: 'Referral share',
+                        value: `${chosen.referralFeePercent}% of the protocol's share — i.e. ${((chosen.protocolFeePercent * chosen.referralFeePercent) / 100).toFixed(2)}% of the trading fee`,
+                      },
                       { label: 'Activation', value: chosen.activationTypeLabel },
+                      ...(chosen.startingFeeBps !== null
+                        ? [
+                            {
+                              label: 'On a 1 SOL trade',
+                              value:
+                                `${(chosen.startingFeeBps / 10000).toFixed(4)} SOL is taken as the fee, ` +
+                                `${(1 - chosen.startingFeeBps / 10000).toFixed(4)} SOL is actually swapped. ` +
+                                `Of the fee: ${((chosen.startingFeeBps / 10000) * (1 - chosen.protocolFeePercent / 100)).toFixed(4)} SOL to liquidity providers, ` +
+                                `${((chosen.startingFeeBps / 10000) * (chosen.protocolFeePercent / 100) * (1 - chosen.referralFeePercent / 100)).toFixed(4)} SOL to Meteora`,
+                            },
+                          ]
+                        : []),
                       { label: 'Config address', value: <Address value={chosen.address} />, mono: true },
                     ]}
                   />
