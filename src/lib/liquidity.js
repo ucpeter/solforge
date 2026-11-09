@@ -225,6 +225,11 @@ export function decodeFeeSchedule(state) {
     }
     const d = cpAmmCoder.types.decode('BorshFeeTimeScheduler', Buffer.from(state.poolFees.baseFee.data))
     const periods = Number(d.number_of_period)
+    // NOTE: only `periods` is trustworthy here. The on-chain account stores the
+    // scheduler pod-aligned, so `period_frequency` / `reduction_factor` decoded
+    // this way come back as absurd magnitudes (1e16+). They are kept for the
+    // dedupe signature (where being consistently wrong is harmless) and must
+    // NOT be shown to the user as real numbers.
     return {
       periods,
       periodFrequency: d.period_frequency.toString(),
