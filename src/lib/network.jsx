@@ -29,9 +29,16 @@ const EXTRA_PUBLIC = {
   devnet: ['https://solana-devnet-rpc.publicnode.com'],
   'mainnet-beta': [
     // Official alias (a different edge than the default host).
+    //
+    // Audited 2026-11-09 and the two previous entries here are GONE:
+    //   endpoints.omniatech.io   -> HTTP 521, returns an HTML error page
+    //   solana-mainnet.public.blastapi.io -> DNS/connection failure
+    // Rather than leave dead hosts for the prober to chew through, the list is
+    // honest about what actually answers. Note that most keyless third-party
+    // mainnet RPCs (publicnode, ankr) refuse getProgramAccounts outright, which
+    // is what pool + config discovery needs — so a custom RPC is the real fix
+    // for mainnet, not a longer fallback list.
     'https://api.mainnet.solana.com',
-    'https://endpoints.omniatech.io/v1/sol/mainnet/public',
-    'https://solana-mainnet.public.blastapi.io',
   ],
 }
 
@@ -80,6 +87,28 @@ function saveFallbackIndex(networkId, idx) {
   } catch {
     /* private mode etc. */
   }
+}
+
+/**
+ * Resolve the LEGACY single-RPC setting to the cluster it actually points at.
+ *
+ * Before v2.6 there was one `customRpc` field shared by both clusters. Anyone
+ * who saved a devnet URL then — which is everyone who has been testing on
+ * devnet — would, on switching to Mainnet, fall through to that devnet URL
+ * (because `customRpcMainnet` is empty) and every call would fail with
+ * AccountNotFound. The header shows a mismatch banner, but the app would still
+ * be pointed at the wrong cluster, so the banner was a warning rather than a
+ * fix.
+ *
+ * Rule: honour the legacy URL only on the cluster it belongs to. If we cannot
+ * tell what cluster it serves (self-hosted node, raw IP), trust the user.
+ */
+export function legacyRpcFor(clusterId, legacy) {
+  const url = (legacy || '').trim()
+  if (!url) return ''
+  const inferred = inferClusterFromUrl(url)
+  if (inferred === null) return url
+  return inferred === clusterId ? url : ''
 }
 
 /* --------------------------------------------------------------- probing */
@@ -142,9 +171,9 @@ export function NetworkProvider({ children }) {
   // Backward compatibility: if per-cluster setting is not set, use customRpc.
   const rpcOverride = useMemo(() => {
     if (networkId === 'mainnet-beta') {
-      return rpcSettings.customRpcMainnet || rpcSettings.customRpc || ''
+      return rpcSettings.customRpcMainnet || legacyRpcFor('mainnet-beta', rpcSettings.customRpc)
     }
-    return rpcSettings.customRpcDevnet || ''
+    return rpcSettings.customRpcDevnet || legacyRpcFor('devnet', rpcSettings.customRpc)
   }, [networkId, rpcSettings])
   const [fallbackIdx, setFallbackIdx] = useState(() => {
     const map = loadFallbackMap()
