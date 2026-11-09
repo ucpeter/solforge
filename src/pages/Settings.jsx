@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react'
 import { Connection } from '@solana/web3.js'
 import { BRAND, FEE_POLICY, NETWORKS, STORAGE_DESCRIPTIONS } from '../lib/config.js'
 import { describeStorage, clearAllLocalData, loadSettings, saveSettings, listCreatedTokens, listCreatedPools, removeCreatedToken, removeCreatedPool } from '../lib/registry.js'
-import { useNetwork, inferClusterFromUrl } from '../lib/network.jsx'
+import { useNetwork, inferClusterFromUrl, legacyRpcFor } from '../lib/network.jsx'
 import { describeError } from '../lib/rpcResilience.js'
 import { Address, Banner, Button, Card, Field, KeyValue, Modal, TextInput } from '../components/ui.jsx'
 
@@ -17,8 +17,8 @@ export default function Settings() {
 
   const initialRpc = () => {
     const loaded = loadSettings()
-    if (isMainnet) return loaded.customRpcMainnet || loaded.customRpc || ''
-    return loaded.customRpcDevnet || ''
+    if (isMainnet) return loaded.customRpcMainnet || legacyRpcFor('mainnet-beta', loaded.customRpc)
+    return loaded.customRpcDevnet || legacyRpcFor('devnet', loaded.customRpc)
   }
 
   const [draft, setDraft] = useState(() => ({
