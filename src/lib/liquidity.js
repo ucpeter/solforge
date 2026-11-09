@@ -57,6 +57,7 @@ import {
   getUnClaimLpFee,
   isConfigPermissionAllow,
   isDynamicFeeEnabled,
+  CpAmmIdl,
 } from '@meteora-ag/cp-amm-sdk'
 import BN from 'bn.js'
 
@@ -980,4 +981,52 @@ export async function readPositionsForMint(connection, sdk = makeSdk(connection)
     poolState: f.poolState,
     liquidity: positionLiquidity(f.positionState),
   }))
+}
+
+/* ------------------------------------------------------- Meteora errors */
+
+/**
+ * The on-chain program reports failures as Anchor error codes:
+ *   {"InstructionError":[5,{"Custom":6002}]}
+ * Those numbers are meaningless to a user, so we decode them against the
+ * error table shipped inside the SDK's own IDL (73 entries, verified present).
+ */
+const METEORA_ERRORS = new Map((CpAmmIdl?.errors ?? []).map((e) => [Number(e.code), e]))
+
+/** Plain-language "what to do about it" for the failures we actually expect. */
+const METEORA_ADVICE = {
+  6002:
+    'The pool price moved by more than your slippage tolerance between quoting this ' +
+    'transaction and running it. Raise the slippage setting and try again — or simply ' +
+    'retry, since the quote refreshes each time.',
+  6003: 'This pool is disabled. Nothing can be added, removed or swapped until it is re-enabled.',
+  6001: 'The fee configuration on this pool is invalid.',
+  6022: 'The pool is still in its activation window, or the activation point has already passed.',
+}
+
+/**
+ * Pull the Anchor `Custom` code out of a raw simulation error and translate it.
+ * Returns null when the error is not a Meteora custom error, so callers can fall
+ * back to their existing rendering.
+ */
+export function describeMeteoraError(errText) {
+  const text = String(errText ?? '')
+  // web3.js reports these in three shapes depending on where it failed:
+  //   simulation : {"InstructionError":[5,{"Custom":6002}]}
+  //   Anchor     : ... Custom(6002) ...
+  //   send       : ... custom program error: 0x1772 ...   (hex!)
+  const m =
+    /["']?Custom["']?\s*[:=]\s*(\d+)/.exec(text) ||
+    /\bCustom\s*\(\s*(\d+)\s*\)/i.exec(text) ||
+    /custom program error:\s*(0x[0-9a-f]+|\d+)/i.exec(text)
+  if (!m) return null
+  const code = /^0x/i.test(m[1]) ? parseInt(m[1], 16) : Number(m[1])
+  const e = METEORA_ERRORS.get(code)
+  if (!e) return null
+  return {
+    code: e.code,
+    name: e.name,
+    msg: e.msg,
+    advice: METEORA_ADVICE[e.code] ?? null,
+  }
 }
