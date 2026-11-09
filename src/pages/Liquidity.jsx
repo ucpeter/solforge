@@ -58,6 +58,7 @@ import {
   readUserPositions,
   sqrtPriceToPrice,
   toUi,
+  describeMeteoraError,
 } from '../lib/liquidity.js'
 import { loadSettings, listCreatedTokens, addCreatedPool } from '../lib/registry.js'
 import { withRetries, describeError, isEndpointBlocked } from '../lib/rpcResilience.js'
@@ -890,6 +891,31 @@ function Positions({ sdk }) {
 function PositionCard({ p, decimalsByMint, network, onAction }) {
   const dA = decimalsByMint[p.poolState.tokenAMint.toBase58()] ?? 9
   const dB = decimalsByMint[p.poolState.tokenBMint.toBase58()] ?? 9
+
+  // "Token A / Token B" tells a user nothing about which asset they are funding.
+  // Name the real asset on each side and show a slice of the mint.
+  const mintA = p.poolState.tokenAMint.toBase58()
+  const mintB = p.poolState.tokenBMint.toBase58()
+  const created = useMemo(() => {
+    try {
+      return listCreatedTokens(network.id)
+    } catch {
+      return []
+    }
+  }, [network.id])
+  const symbolFor = (mintStr) => {
+    if (mintStr === WSOL.toBase58()) return 'SOL'
+    const hit = created.find((c) => c.mint === mintStr)
+    return hit?.symbol || null
+  }
+  const shortMint = (mintStr) => `${mintStr.slice(0, 4)}…${mintStr.slice(-4)}`
+  const sideLabel = (mintStr) => {
+    const sym = symbolFor(mintStr)
+    return sym ? `${sym} (${shortMint(mintStr)})` : shortMint(mintStr)
+  }
+  const sideName = (mintStr) => symbolFor(mintStr) || shortMint(mintStr)
+  const isNativeA = mintA === WSOL.toBase58()
+  const isNativeB = mintB === WSOL.toBase58()
   const price = sqrtPriceToPrice(p.poolState.sqrtPrice, dA, dB)
   const liq = p.liquidity
   const lockable = lockableLiquidity(p.positionState, p.poolState)
@@ -1046,6 +1072,11 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
   const [pct, setPct] = useState('100')
   const [addSide, setAddSide] = useState('A')
   const [addAmount, setAddAmount] = useState('')
+  // Slippage for add-liquidity. This was hard-coded at 50 bps with no way to
+  // change it: any pool that moved more than 0.5% between quoting and execution
+  // failed with Meteora error 6002 (ExceededSlippage). 1% is now the default and
+  // the user can raise it.
+  const [addSlippage, setAddSlippage] = useState('100')
   const [cliffDays, setCliffDays] = useState('0')
   const [periods, setPeriods] = useState('30')
   const [useVesting, setUseVesting] = useState(false)
@@ -1140,7 +1171,7 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
           positionNftMint: p.positionNftMint,
           inAmount: new BN(raw),
           inIsTokenA: isA,
-          slippageBps: 50,
+          slippageBps: Number(addSlippage) || 0,
         })
       }
       setPlan(planTx)
@@ -1155,7 +1186,7 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
   useEffect(() => {
     build()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, pct, closePos, useVesting, addSide, addAmount, cliffDays, periods])
+  }, [kind, pct, closePos, useVesting, addSide, addAmount, addSlippage, cliffDays, periods])
 
   if (!open) return null
 
@@ -1204,16 +1235,43 @@ function PositionAction({ action, sdk, decimalsByMint, onDone }) {
       {kind === 'add' && (
         <Card title="Deposit">
           <div className="form__row">
-            <Field label="Side">
+            <Field label={`Side — which token you are supplying`}>
               <select className="input input--select" value={addSide} onChange={(e) => setAddSide(e.target.value)}>
-                <option value="A">Token A</option>
-                <option value="B">Token B</option>
+                <option value="A">{sideLabel(mintA)} — Token A</option>
+                <option value="B">{sideLabel(mintB)} — Token B</option>
               </select>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {addSide === 'A' ? `Token A = ${sideName(mintA)}` : `Token B = ${sideName(mintB)}`}
+                {(addSide === 'A' ? isNativeA : isNativeB) ? ' · native SOL, wrapped automatically' : ''}
+              </div>
             </Field>
-            <Field label="Amount (UI units)">
+            <Field label={`Amount (${addSide === 'A' ? sideName(mintA) : sideName(mintB)})`}>
               <TextInput value={addAmount} onChange={setAddAmount} placeholder="e.g. 1000" />
             </Field>
+            <Field label="Slippage (bps)">
+              <TextInput value={addSlippage} onChange={setAddSlippage} placeholder="100" />
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {(Number(addSlippage) || 0) / 100}% · raise this if it fails
+              </div>
+            </Field>
           </div>
+          {plan?.amountA && plan?.amountB ? (
+            <Banner tone="info">
+              <strong>What this will take from your wallet:</strong>
+              <br />
+              {toUi(plan.amountA, dA)} {sideName(mintA)} (Token A)
+              <br />+ {toUi(plan.amountB, dB)} {sideName(mintB)} (Token B)
+              <br />
+              <span className="muted">
+                You pick one side; the pool requires the matching amount of the other at the current price.
+              </span>
+            </Banner>
+          ) : (
+            <Banner tone="info">
+              A pool needs <strong>both</strong> tokens. You choose one side and how much — the app quotes the
+              matching amount of the other side at the pool&rsquo;s current price and shows it here before you sign.
+            </Banner>
+          )}
         </Card>
       )}
       {kind === 'lock' && useVesting && (
