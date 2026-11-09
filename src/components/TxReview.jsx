@@ -26,6 +26,7 @@ import {
 import { useNetwork } from '../lib/network.jsx'
 import { useWallet } from '../lib/wallet.jsx'
 import { clsx, lamportsToSol } from '../lib/format.js'
+import { describeMeteoraError } from '../lib/liquidity.js'
 
 export default function TxReview({
   open,
@@ -178,6 +179,9 @@ export default function TxReview({
   }
 
   const simFailed = simulations.find((s) => !s.ok)
+  // Anchor errors arrive as bare numbers ({"Custom":6002}). Decode them against
+  // the Meteora IDL's own error table so the user reads English, not a code.
+  const meteoraError = simFailed ? describeMeteoraError(simFailed.error) : null
 
   return (
     <Modal
@@ -238,6 +242,18 @@ export default function TxReview({
           {fundingHint && (
             <Banner tone="warn" title="Your wallet is not funded on this network">
               {fundingHint}
+            </Banner>
+          )}
+
+          {simFailed && meteoraError && (
+            <Banner tone="warn" title={`Meteora error ${meteoraError.code} — ${meteoraError.name}`}>
+              <strong>{meteoraError.msg}</strong>
+              {meteoraError.advice ? (
+                <>
+                  <br />
+                  {meteoraError.advice}
+                </>
+              ) : null}
             </Banner>
           )}
 
