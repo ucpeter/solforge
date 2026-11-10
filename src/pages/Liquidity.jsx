@@ -60,7 +60,7 @@ import {
   toUi,
   describeMeteoraError,
 } from '../lib/liquidity.js'
-import { loadSettings, listCreatedTokens, addCreatedPool } from '../lib/registry.js'
+import { loadSettings, listCreatedTokens, addCreatedPool, listCreatedPools } from '../lib/registry.js'
 import { withRetries, describeError, isEndpointBlocked } from '../lib/rpcResilience.js'
 import { toRawAmount, clsx } from '../lib/format.js'
 import { solUsdPrice, formatUsd } from '../lib/price.js'
