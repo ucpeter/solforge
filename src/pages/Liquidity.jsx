@@ -172,7 +172,7 @@ function CreatePool({ sdk, slippageBps, initialMint = null }) {
       setConfigs(list)
     } catch (err) {
       if (isEndpointBlocked(err)) probeFallbacks()
-      setConfigError(describeError(err))
+      setConfigError(describeError(err, network))
     } finally {
       setConfigBusy(false)
     }
@@ -776,7 +776,7 @@ function Positions({ sdk }) {
       }
     } catch (err) {
       if (isEndpointBlocked(err)) probeFallbacks()
-      setError(describeError(err))
+      setError(describeError(err, network))
     }
   }, [connection, sdk, wallet.isConnected, wallet.publicKey, decimalsByMint, network.id, probeFallbacks])
 

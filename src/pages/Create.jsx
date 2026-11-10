@@ -36,6 +36,9 @@ import {
   inspectMetadataUri,
   uploadToPinata,
   uploadJsonToPinata,
+  verifyCid,
+  inspectMetadataDocument,
+  checkImageLoads,
 } from '../lib/ipfs.js'
 import { addCreatedToken } from '../lib/registry.js'
 import { loadSettings, saveSettings } from '../lib/registry.js'
@@ -97,6 +100,15 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const [metadataUri, setMetadataUri] = useState('') // final on-chain URI
+
+  // Upload verification. Pinata can return a CID without storing the file, and
+  // an immutable token can never have its URI corrected — so we refuse to
+  // proceed on an unverified URI unless the user explicitly overrides.
+  const [verifying, setVerifying] = useState(false)
+  const [verifyMsg, setVerifyMsg] = useState('')
+  const [uriVerified, setUriVerified] = useState(null) // true | false | null
+  const [pendingUri, setPendingUri] = useState('') // the URI that failed checks
+  const [overrideUnverified, setOverrideUnverified] = useState(false)
   const fileRef = useRef(null)
 
   const set = (k) => (v) => {
@@ -178,13 +190,25 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
     }
     setUploading(true)
     setUploadError(null)
+    setVerifying(true)
     try {
       const { cid } = await uploadToPinata({ file: imageFile, jwt, name: imageFile.name })
-      setImageUri(gatewayUrl(cid))
+      const url = gatewayUrl(cid)
+      // Pinata can hand back a CID it never stored. Confirm before we rely on it.
+      const probe = await verifyCid({ cid })
+      if (!probe.ok) {
+        setUploadError(
+          `Pinata accepted the upload and returned ${cid}, but the image is not retrievable: ${probe.error}. ` +
+            'Nothing has been written on-chain yet — check your Pinata storage quota and upload again.',
+        )
+        return
+      }
+      setImageUri(url)
       setUploadError(null)
     } catch (err) {
       setUploadError(err.message)
     } finally {
+      setVerifying(false)
       setUploading(false)
     }
   }
@@ -201,6 +225,10 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
     }
     setUploading(true)
     setUploadError(null)
+    setVerifying(true)
+    setVerifyMsg('Checking that the metadata JSON is actually being served…')
+    setUriVerified(null)
+    setPendingUri('')
     try {
       const doc = buildMetadataJson({
         name: form.name,
@@ -210,11 +238,55 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
         socials: { twitter: meta.twitter, telegram: meta.telegram, website: meta.website },
       })
       const { cid } = await uploadJsonToPinata({ json: doc, jwt })
-      setMetadataUri(gatewayUrl(cid))
+      const url = gatewayUrl(cid)
+
+      // 1. Is the document retrievable at all?
+      const probe = await verifyCid({ cid })
+      if (!probe.ok) {
+        fail(
+          url,
+          `Pinata accepted the upload and returned ${cid}, but the file is not retrievable: ${probe.error}. ` +
+            'This usually means the account is out of storage quota. Do not launch — the token would be ' +
+            'permanently stuck with a dead metadata URI.',
+        )
+        return
+      }
+
+      // 2. Is it real metadata, with an image field?
+      const shape = inspectMetadataDocument(probe.text)
+      if (!shape.ok) {
+        fail(url, `The file at ${url} is live but unusable: ${shape.problem}.`)
+        return
+      }
+
+      // 3. Does the image inside it actually load?
+      setVerifyMsg('Checking that the image inside the metadata loads…')
+      const imageOk = await checkImageLoads(shape.image)
+      if (!imageOk) {
+        fail(
+          url,
+          `The metadata is live, but the image inside it did not load: ${shape.image}. ` +
+            'Wallets would show no logo. Fix the image and upload again.',
+        )
+        return
+      }
+
+      setMetadataUri(url)
+      setUriVerified(true)
+      setVerifyMsg(
+        `Verified — the metadata JSON and its image both load. ${probe.attempts > 1 ? `(${probe.attempts} attempts)` : ''}`,
+      )
     } catch (err) {
       setUploadError(err.message)
     } finally {
-      setUploading(false)
+      setVerifying(false)
+    }
+
+    function fail(url, message) {
+      setPendingUri(url)
+      setUriVerified(false)
+      setVerifyMsg(message)
+      setMetadataUri('')
     }
   }
 
@@ -391,6 +463,57 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
                   {metadataUri ? 'Rebuild metadata JSON' : 'Upload metadata JSON to Pinata'}
                 </Button>
                 {metadataUri && <span className="muted filerow__uri">{metadataUri}</span>}
+
+                {verifying && <Spinner label={verifyMsg || 'Verifying…'} />}
+
+                {!verifying && uriVerified === true && (
+                  <Banner tone="good" title="Metadata verified">
+                    {verifyMsg}
+                  </Banner>
+                )}
+
+                {!verifying && uriVerified === false && (
+                  <Banner tone="danger" title="Metadata URI could not be verified — launch blocked">
+                    <p style={{ margin: '0 0 10px' }}>{verifyMsg}</p>
+                    <p className="muted" style={{ margin: '0 0 10px', fontSize: 13 }}>
+                      Nothing has been written on-chain. If this token is created with the metadata
+                      authority renounced, a dead URI can never be corrected — that is why this is
+                      blocked rather than warned about.
+                    </p>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <Button variant="secondary" onClick={handleBuildMetadata}>
+                        Upload again
+                      </Button>
+                      <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          checked={overrideUnverified}
+                          onChange={(e) => setOverrideUnverified(e.target.checked)}
+                        />
+                        I have checked this URI myself — let me continue anyway
+                      </label>
+                    </div>
+                    {overrideUnverified && pendingUri && (
+                      <div style={{ marginTop: 10 }}>
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setMetadataUri(pendingUri)
+                            setUriVerified(null)
+                            setOverrideUnverified(false)
+                            setVerifyMsg('Proceeding with an unverified URI — at your own risk.')
+                          }}
+                        >
+                          Use {pendingUri.slice(0, 42)}… anyway
+                        </Button>
+                      </div>
+                    )}
+                  </Banner>
+                )}
+
+                {!verifying && uriVerified === null && verifyMsg && (
+                  <Banner tone="warn">{verifyMsg}</Banner>
+                )}
               </div>
             ) : (
               <div className="form__stack">

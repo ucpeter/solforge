@@ -160,7 +160,7 @@ export default function Portfolio({ onManage, onPositions }) {
           setHoldings(stale)
           setHoldingsError('Showing last known data — the RPC failed on refresh.')
         } else {
-          setHoldingsError(describeError(err))
+          setHoldingsError(describeError(err, network))
         }
       } finally {
         setHoldingsLoading(false)
@@ -200,7 +200,7 @@ export default function Portfolio({ onManage, onPositions }) {
           setPositions(stale)
           setPositionsError('Showing last known data — the RPC failed on refresh.')
         } else {
-          setPositionsError(describeError(err))
+          setPositionsError(describeError(err, network))
         }
       } finally {
         setPositionsLoading(false)

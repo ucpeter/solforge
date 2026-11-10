@@ -116,7 +116,7 @@ export default function PoolHoldings({ sdk }) {
         setRaydiumList(rList || [])
       } catch (err) {
         if (isEndpointBlocked(err)) probeFallbacks()
-        setError(describeError(err))
+        setError(describeError(err, network))
       } finally {
         setLoading(false)
       }

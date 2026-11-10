@@ -76,7 +76,7 @@ export default function Settings() {
       const slot = await probe.getSlot()
       alert(`Connected — current slot ${slot.toLocaleString()}`)
     } catch (err) {
-      alert(`Could not reach that endpoint: ${describeError(err)}`)
+      alert(`Could not reach that endpoint: ${describeError(err, networkId)}`)
     }
   }
 
