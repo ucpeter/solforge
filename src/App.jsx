@@ -211,7 +211,7 @@ function Header({ page, setPage }) {
 }
 
 function NetworkStats() {
-  const { stats, statsLoading, statsError, refreshStats, endpoint, endpointSource } = useNetwork()
+  const { stats, statsLoading, statsError, refreshStats, endpoint, endpointSource, network } = useNetwork()
 
   // The provider already polls every 30s with the current connection. We only
   // re-fetch when the endpoint changes (refreshStats identity changes with it),
@@ -225,7 +225,7 @@ function NetworkStats() {
     return (
       <span
         className="netstats netstats--err"
-        title={`${describeError(statsError)}\n\nEndpoint: ${endpoint} (${endpointSource}) — click to retry`}
+        title={`${describeError(statsError, network)}\n\nEndpoint: ${endpoint} (${endpointSource}) — click to retry`}
       >
         <span className="netstats__dot" />
         <button className="linkish" onClick={refreshStats}>
