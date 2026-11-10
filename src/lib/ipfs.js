@@ -97,6 +97,111 @@ export async function uploadToPinata({ file, jwt, name }) {
   return { cid, api: 'v1' }
 }
 
+/* ----------------------------------------------------- post-upload checks */
+
+/**
+ * Confirm that a CID is genuinely retrievable through the gateway.
+ *
+ * Pinata can answer an upload with HTTP 200 and a perfectly well-formed CID
+ * while never actually storing the bytes — usually because the account is out
+ * of storage quota. The gateway then reports ERR_ID:00016 ("timed out searching
+ * for a file on the non-pinata IPFS network"). Taking the CID at face value
+ * writes a dead URI on-chain, and if the token is immutable that mistake is
+ * permanent. So: check before we let anyone launch.
+ *
+ * Retries because IPFS propagation is not instant — a brand new CID can take a
+ * few seconds to start resolving even when everything is healthy.
+ */
+export async function verifyCid({
+  cid,
+  gateway = DEFAULT_GATEWAY,
+  attempts = 4,
+  timeoutMs = 12000,
+  onAttempt,
+} = {}) {
+  const url = gatewayUrl(cid, gateway)
+  let lastError = 'unknown error'
+
+  for (let i = 0; i < attempts; i++) {
+    onAttempt?.({ attempt: i + 1, attempts, url })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetch(url, { signal: controller.signal, cache: 'no-store' })
+      clearTimeout(timer)
+      if (res.ok) {
+        const text = await res.text()
+        if (text && text.trim()) {
+          return { ok: true, url, text, bytes: text.length, attempts: i + 1 }
+        }
+        lastError = 'the gateway returned an empty response'
+      } else {
+        lastError = `the gateway returned HTTP ${res.status}`
+      }
+    } catch (err) {
+      clearTimeout(timer)
+      lastError =
+        err?.name === 'AbortError'
+          ? `no response from the gateway within ${Math.round(timeoutMs / 1000)}s`
+          : err?.message || 'the request failed'
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 1500 * (i + 1)))
+  }
+  return { ok: false, url, error: lastError }
+}
+
+/**
+ * Validate the shape of a metadata document: real JSON, carrying an image.
+ * Returns the parsed doc so callers can check the image URL too.
+ */
+export function inspectMetadataDocument(text) {
+  let doc
+  try {
+    doc = JSON.parse(text)
+  } catch {
+    return { ok: false, problem: 'the file is not valid JSON' }
+  }
+  if (!doc || typeof doc !== 'object') {
+    return { ok: false, problem: 'the JSON is not an object' }
+  }
+  const image = typeof doc.image === 'string' ? doc.image.trim() : ''
+  if (!image) {
+    return {
+      ok: false,
+      problem: 'the JSON has no "image" field, so wallets and explorers will show no logo',
+    }
+  }
+  return { ok: true, doc, image, name: doc.name, symbol: doc.symbol }
+}
+
+/**
+ * Does this image URL actually load?
+ *
+ * Uses an <img> rather than fetch on purpose: image loads are not subject to
+ * CORS, so a working image on another host will not be falsely reported broken.
+ */
+export function checkImageLoads(url, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    if (!url) return resolve(false)
+    let settled = false
+    const finish = (ok) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    try {
+      const img = new Image()
+      img.onload = () => finish(true)
+      img.onerror = () => finish(false)
+      img.src = url
+    } catch {
+      finish(false)
+    }
+  })
+}
+
 export async function uploadJsonToPinata({ json, jwt, name = 'metadata.json' }) {
   const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
   return uploadToPinata({ file: blob, jwt, name })

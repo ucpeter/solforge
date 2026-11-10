@@ -57,16 +57,35 @@ export async function withRetries(fn, { attempts = 3, baseDelayMs = 1500 } = {})
 
 /* ------------------------------------------------------------------ error */
 
-export function describeError(err) {
+/**
+ * Name the cluster an error came from.
+ *
+ * These messages used to hard-code the word "devnet", so a mainnet rate-limit
+ * told the user to go and get a devnet key — which sent at least one person
+ * looking in completely the wrong place. `network` may be a network object or
+ * a bare id string; it is optional so callers degrade to neutral wording.
+ */
+function clusterOf(network) {
+  const id = typeof network === 'string' ? network : network?.id
+  const label = typeof network === 'string' ? null : network?.label
+  if (id === 'mainnet-beta') return { what: 'mainnet RPC', key: 'mainnet' }
+  if (id === 'devnet') return { what: 'devnet RPC', key: 'devnet' }
+  if (id === 'testnet') return { what: 'testnet RPC', key: 'testnet' }
+  return { what: label ? `${label} RPC` : 'RPC', key: id || 'RPC' }
+}
+
+export function describeError(err, network) {
   const msg = String(err?.message ?? err ?? 'Unknown error')
+  const { what, key } = clusterOf(network)
+
   if (/403|access forbidden/i.test(msg)) {
-    return '403 Access forbidden — this cluster’s public RPC is blocking requests from your network. The app automatically tries other public endpoints; if it keeps failing, set a custom RPC in Settings (a free Helius or Triton key works on mainnet too).'
+    return `403 Access forbidden — the public ${what} is blocking requests from your network. The app automatically tries other public endpoints; if it keeps failing, set a custom RPC in Settings (a free Helius or Triton ${key} key works).`
   }
-  if (/require[d]? (a |an |personal )?token/i.test(msg)) {
-    return 'This public endpoint only serves users with a token. The app will keep trying other public endpoints; if it keeps failing, set a custom RPC in Settings (a free Helius or Triton key works on mainnet too).'
+  if (/requires?[\s-]+(?:(?:a|an|personal|your)\s+)*token/i.test(msg)) {
+    return `This public endpoint only serves users with a token. The app will keep trying other public endpoints; if it keeps failing, set a custom RPC in Settings (a free Helius or Triton ${key} key works).`
   }
   if (/429|too many requests/i.test(msg)) {
-    return 'The public devnet RPC rate-limited this request. Tap Retry, or set a custom RPC in Settings — a free Helius or Triton devnet key makes it go away.'
+    return `The public ${what} rate-limited this request. Tap Retry, or set a custom RPC in Settings — a free Helius or Triton ${key} key makes it go away.`
   }
   return msg
 }

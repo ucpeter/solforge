@@ -459,6 +459,9 @@ export async function refreshBlockhash(connection, tx) {
     tx.recentBlockhash = blockhash
     tx.lastValidBlockHeight = lastValidBlockHeight
   }
+  // Stash it on the object for both shapes. sendTransactionBatch reads this to
+  // tell "expired before it was ever picked up" apart from "still unknown".
+  try { tx.__lastValidBlockHeight = lastValidBlockHeight } catch { /* frozen tx */ }
   return blockhash
 }
 
@@ -614,13 +617,102 @@ export function messageAccountKeys(tx) {
   }
 }
 
-export async function confirmSignature(connection, signature, { blockhash, lastValidBlockHeight } = {}) {
-  if (blockhash && lastValidBlockHeight !== undefined) {
-    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed')
-  } else {
-    await connection.confirmTransaction(signature, 'confirmed')
+/**
+ * Broadcast but not observed in time.
+ *
+ * This is NOT a failure. The transaction very often has landed. Callers must
+ * render it as "unknown — check the explorer", never as "failed".
+ */
+export class ConfirmationTimeoutError extends Error {
+  constructor(signature, seconds) {
+    super(
+      `Not confirmed after ${seconds}s. It is unknown whether this succeeded — ` +
+        'check the signature on Solana Explorer before you retry, or you may send it twice.',
+    )
+    this.name = 'ConfirmationTimeoutError'
+    this.signature = signature
+    this.seconds = seconds
   }
-  return signature
+}
+
+/** The blockhash expired before the network ever saw the transaction. */
+export class TransactionExpiredError extends Error {
+  constructor(signature) {
+    super(
+      'This transaction expired before the network picked it up, so nothing was sent. ' +
+        'It is safe to try again.',
+    )
+    this.name = 'TransactionExpiredError'
+    this.signature = signature
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Read one signature status, tolerating RPCs without history search. */
+async function readSignatureStatus(connection, signature) {
+  try {
+    const r = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })
+    return r?.value?.[0] ?? null
+  } catch {
+    try {
+      const r = await connection.getSignatureStatuses([signature])
+      return r?.value?.[0] ?? null
+    } catch {
+      return null // transient RPC error — keep polling
+    }
+  }
+}
+
+/**
+ * Wait for a transaction to confirm.
+ *
+ * Why this exists instead of `connection.confirmTransaction(sig, 'confirmed')`:
+ * that call subscribes over a WebSocket (`signatureSubscribe`), does a single
+ * status poll, and races a hard-coded 30 second timer. On hosted HTTP RPCs the
+ * websocket routinely never delivers, so it times out on transactions that land
+ * seconds later — which made this app report successful sends as failures.
+ *
+ * This polls `getSignatureStatuses` over plain HTTP instead: no websocket
+ * dependency, a much longer window, and it separates three genuinely different
+ * outcomes — confirmed, rejected on-chain, and unknown.
+ */
+export async function confirmSignature(
+  connection,
+  signature,
+  { blockhash, lastValidBlockHeight, timeoutMs = 90_000, onPoll } = {},
+) {
+  const startedAt = Date.now()
+  let delay = 1500
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await readSignatureStatus(connection, signature)
+
+    if (status?.err) {
+      throw new Error(`Transaction was rejected on-chain: ${JSON.stringify(status.err)}`)
+    }
+    if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
+      return signature
+    }
+
+    // Expiry: only trusted once we have given the network a fair chance to
+    // index it, and only if we have never once seen the transaction.
+    if (lastValidBlockHeight !== undefined && Date.now() - startedAt > 20_000 && !status) {
+      try {
+        const height = await connection.getBlockHeight('confirmed')
+        if (height > lastValidBlockHeight) throw new TransactionExpiredError(signature)
+      } catch (err) {
+        if (err instanceof TransactionExpiredError) throw err
+        /* transient — keep polling */
+      }
+    }
+
+    onPoll?.({ elapsedMs: Date.now() - startedAt, seen: Boolean(status) })
+    await sleep(delay)
+    delay = Math.min(Math.round(delay * 1.4), 5000)
+  }
+
+  throw new ConfirmationTimeoutError(signature, Math.round((Date.now() - startedAt) / 1000))
 }
 
 /**
@@ -655,7 +747,12 @@ export async function sendTransactionBatch({
     const raw = isVersioned(tx) ? tx.serialize() : tx.serialize()
     const signature = await connection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 3 })
     onProgress?.({ phase: 'confirming', index: i, total, signature })
-    await confirmSignature(connection, signature)
+    await confirmSignature(connection, signature, {
+      blockhash: isVersioned(tx) ? tx.message.recentBlockhash : tx.recentBlockhash,
+      lastValidBlockHeight: tx.__lastValidBlockHeight,
+      onPoll: ({ elapsedMs }) =>
+        onProgress?.({ phase: 'confirming', index: i, total, signature, elapsedMs }),
+    })
     results.push({ index: i, signature })
     onProgress?.({ phase: 'confirmed', index: i, total, signature })
   }
