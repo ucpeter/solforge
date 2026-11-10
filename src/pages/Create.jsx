@@ -237,7 +237,7 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
         imageUri,
         socials: { twitter: meta.twitter, telegram: meta.telegram, website: meta.website },
       })
-      const { cid } = await uploadJsonToPinata({ json: doc, jwt })
+      const { cid, network: pinataNetwork } = await uploadJsonToPinata({ json: doc, jwt })
       const url = gatewayUrl(cid)
 
       // 1. Is the document retrievable at all?
@@ -274,7 +274,8 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
       setMetadataUri(url)
       setUriVerified(true)
       setVerifyMsg(
-        `Verified — the metadata JSON and its image both load. ${probe.attempts > 1 ? `(${probe.attempts} attempts)` : ''}`,
+        `Verified — the metadata JSON and its image both load from Pinata's ${pinataNetwork || 'public'} IPFS network.` +
+          `${probe.attempts > 1 ? ` (took ${probe.attempts} attempts)` : ''}`,
       )
     } catch (err) {
       setUploadError(err.message)
