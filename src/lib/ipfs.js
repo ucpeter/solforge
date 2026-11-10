@@ -76,58 +76,76 @@ async function readError(res) {
 export async function uploadToPinata({ file, jwt, name }) {
   if (!jwt?.trim()) throw new Error('No Pinata API key set. Add one in Settings, or choose "paste a metadata URI".')
 
-  // --- v3 ---------------------------------------------------------------
+  const failures = []
+  const filename = name || file?.name || 'upload'
+
+  // --- v3: ask for the public network explicitly ------------------------
+  // v3 defaults `network` to PRIVATE when the caller omits it, and private
+  // files are deliberately not served over public IPFS — token metadata put
+  // there can never be read by wallets or explorers. Some accounts ignore the
+  // field and answer private anyway, so a private result is treated as a
+  // FAILED ATTEMPT rather than fatal: we fall through to v1 below.
   try {
     const form = new FormData()
-    form.append('file', file, name || file.name || 'upload')
-    // v3 defaults `network` to PRIVATE when it is not sent. Private files are
-    // not served over public IPFS, so token metadata uploaded that way can
-    // never be read by wallets or explorers. Always ask for public.
+    form.append('file', file, filename)
     form.append('network', 'public')
     const res = await fetch(`${PINATA_V3_BASE}/files`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${jwt.trim()}`, Accept: 'application/json' },
       body: form,
     })
+    const text = await res.text()
     if (res.ok) {
-      const json = await res.json()
-      const cid = extractCid(json)
-      if (cid) {
-        const network = extractNetwork(json)
-        // Belt and braces: if Pinata still reports private, stop immediately
-        // rather than writing a URI that can never resolve.
-        if (network && network !== 'public') {
-          throw new Error(
-            `Pinata stored this file on its "${network}" network. Private files are not ` +
-              'reachable through public IPFS, so wallets and explorers would never load it. ' +
-              'In pinata.cloud → Files, switch the file to Public and upload again.',
-          )
-        }
-        return { cid, api: 'v3', network: network ?? 'public' }
+      let json = null
+      try {
+        json = JSON.parse(text)
+      } catch {
+        /* not JSON — fall through with the raw text in the failure list */
       }
+      const cid = extractCid(json)
+      const network = extractNetwork(json)
+      if (cid && network !== 'private') {
+        return { cid, api: 'v3', network: network ?? 'unreported' }
+      }
+      failures.push(
+        cid
+          ? `v3 stored it on Pinata's "${network}" network, which public IPFS cannot serve (response: ${text.slice(0, 300)})`
+          : `v3 returned no CID (response: ${text.slice(0, 300)})`,
+      )
     } else if (res.status !== 404 && res.status !== 405) {
-      throw new Error(await readError(res))
+      failures.push(`v3 ${await readError(res)}`)
     }
   } catch (err) {
-    // A network/CORS failure here should still let v1 have a go.
-    const transient = /Failed to fetch|NetworkError|CORS/i.test(err?.message || '')
-    if (!transient) throw err
+    failures.push(`v3 request failed: ${err?.message || err}`)
   }
 
-  // --- v1 fallback ------------------------------------------------------
-  const form = new FormData()
-  form.append('file', file, name || file.name || 'upload')
-  const res = await fetch(`${PINATA_V1_BASE}/pinFileToIPFS`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${jwt.trim()}`, Accept: 'application/json' },
-    body: form,
-  })
-  if (!res.ok) throw new Error(await readError(res))
-  const json = await res.json()
-  const cid = extractCid(json)
-  if (!cid) throw new Error('Pinata accepted the upload but returned no CID.')
-  // The v1 pinFileToIPFS endpoint has no public/private concept — it pins public.
-  return { cid, api: 'v1', network: extractNetwork(json) ?? 'public' }
+  // --- v1 fallback -------------------------------------------------------
+  // pinFileToIPFS predates the public/private split entirely: it pins to the
+  // PUBLIC IPFS network, which is exactly what token metadata requires.
+  try {
+    const form = new FormData()
+    form.append('file', file, filename)
+    const res = await fetch(`${PINATA_V1_BASE}/pinFileToIPFS`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt.trim()}`, Accept: 'application/json' },
+      body: form,
+    })
+    if (!res.ok) throw new Error(await readError(res))
+    const json = await res.json()
+    const cid = extractCid(json)
+    if (!cid) {
+      throw new Error(`v1 returned no CID (${JSON.stringify(json).slice(0, 200)})`)
+    }
+    return { cid, api: 'v1', network: 'public' }
+  } catch (err) {
+    failures.push(`v1 request failed: ${err?.message || err}`)
+  }
+
+  throw new Error(
+    'Pinata would not store this file on public IPFS, so the metadata URI would never load in wallets or explorers. ' +
+      failures.join(' — ') +
+      ' Check your Pinata plan storage limit and that the key has files:write permission.',
+  )
 }
 
 /* ----------------------------------------------------- post-upload checks */
