@@ -281,6 +281,9 @@ export default function Create({ initialClone = null, onClearClone = () => {} })
       setUploadError(err.message)
     } finally {
       setVerifying(false)
+      // Must clear BOTH: the button is disabled while `uploading` is true, so
+      // leaving it set locks the user out of rebuilding their metadata.
+      setUploading(false)
     }
 
     function fail(url, message) {
