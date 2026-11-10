@@ -53,6 +53,9 @@ export default function TxReview({
   const [progress, setProgress] = useState(null)
   const [signatures, setSignatures] = useState([])
   const [error, setError] = useState(null)
+  // Set when the transaction was broadcast but we could not observe the
+  // outcome. This is NOT a failure, and must never be rendered as one.
+  const [unknownSig, setUnknownSig] = useState(null)
   const [ackMainnet, setAckMainnet] = useState(false)
   /**
    * Plain-language explanation for the single most confusing failure: an
@@ -154,6 +157,7 @@ export default function TxReview({
   async function send() {
     setPhase('sending')
     setError(null)
+    setUnknownSig(null)
     try {
       // Renew every blockhash at the last moment — the one from review prep
       // may have expired while the user was reading or deciding.
@@ -170,7 +174,15 @@ export default function TxReview({
       setPhase('done')
       await onSent?.(results)
     } catch (err) {
-      setError(err?.message || String(err))
+      // A confirmation timeout means "broadcast, outcome unknown" — the
+      // transaction very often landed. Telling the user it failed here would
+      // be false, and would invite a duplicate send.
+      if (err?.name === 'ConfirmationTimeoutError') {
+        setUnknownSig(err.signature || null)
+        setError(null)
+      } else {
+        setError(err?.message || String(err))
+      }
       // Stay in "ready" rather than "failed": the review is still valid. If the
       // wallet prompt took too long and the blockhash expired mid-flight, the
       // user can just tap "Confirm & sign" again — it refreshes and retries.
@@ -345,6 +357,25 @@ export default function TxReview({
                 ))}
               </ul>
             </Card>
+          )}
+
+          {unknownSig && (
+            <Banner tone="warn" title="Sent — but we could not confirm the result">
+              <p style={{ margin: '0 0 8px' }}>
+                The transaction reached the network, but the RPC never reported an outcome, so
+                this app cannot tell you whether it succeeded. <strong>Do not assume it failed.</strong>{' '}
+                Check the signature on Solana Explorer first — and only sign again if it genuinely
+                did not land, otherwise you will send it twice.
+              </p>
+              <a
+                href={network.explorerTx(unknownSig)}
+                target="_blank"
+                rel="noreferrer noopener"
+                style={{ wordBreak: 'break-all' }}
+              >
+                View {unknownSig.slice(0, 24)}… on Solana Explorer
+              </a>
+            </Banner>
           )}
 
           {error && (
